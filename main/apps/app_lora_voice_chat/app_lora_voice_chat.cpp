@@ -114,10 +114,17 @@ void AppLoraVoiceChat::onRunning()
                     _tx_packet_inflight = sendNextPacket();
                     if (_tx_packet_inflight) {
                         renderSending();
+                    } else if (sendControlPacket(CONTROL_FREE)) {
+                        _tx_packet_inflight      = true;
+                        _tx_sending_free_control = true;
+                        renderSending();
+                    } else {
+                        finishSending();
                     }
                 } else if (sendControlPacket(CONTROL_FREE)) {
                     _tx_packet_inflight      = true;
                     _tx_sending_free_control = true;
+                    renderSending();
                 } else {
                     finishSending();
                 }
