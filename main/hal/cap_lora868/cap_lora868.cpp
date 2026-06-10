@@ -144,7 +144,8 @@ void CapLoRa868::lora_update()
     }
 
     if (_lora_tx_flag) {
-        _lora_tx_flag = false;
+        _lora_tx_flag  = false;
+        _is_tx_pending = false;
 
         mclog::tagDebug(_tag, "lora send msg success");
         _radio_lib.sx1262->setPacketReceivedAction(_lora_set_rx_flag);
@@ -154,7 +155,7 @@ void CapLoRa868::lora_update()
 
 bool CapLoRa868::loraSendMsg(const std::string& msg)
 {
-    if (!_is_inited) {
+    if (!_is_inited || _is_tx_pending) {
         return false;
     }
 
@@ -166,6 +167,30 @@ bool CapLoRa868::loraSendMsg(const std::string& msg)
         mclog::tagError(_tag, "lora send msg failed, code {}", state);
         return false;
     }
+    _is_tx_pending = true;
+    return true;
+}
+
+bool CapLoRa868::isTxDone() const
+{
+    return !_is_tx_pending;
+}
+
+bool CapLoRa868::loraSendBytes(const uint8_t* data, size_t len)
+{
+    if (!_is_inited || _is_tx_pending) {
+        return false;
+    }
+
+    mclog::tagDebug(_tag, "lora send bytes: len {}", len);
+
+    _radio_lib.sx1262->setPacketSentAction(_lora_set_tx_flag);
+    int state = _radio_lib.sx1262->startTransmit(data, len);
+    if (state != RADIOLIB_ERR_NONE) {
+        mclog::tagError(_tag, "lora send bytes failed, code {}", state);
+        return false;
+    }
+    _is_tx_pending = true;
     return true;
 }
 

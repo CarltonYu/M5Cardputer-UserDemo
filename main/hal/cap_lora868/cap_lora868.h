@@ -26,6 +26,8 @@ public:
     };
 
     bool loraSendMsg(const std::string& msg);
+    bool loraSendBytes(const uint8_t* data, size_t len);
+    bool isTxDone() const;
     mclog::Signal<const std::string&> onLoraMsg;
 
     /* ----------------------------------- GPS ---------------------------------- */
@@ -33,7 +35,8 @@ public:
     void returnGPS();
 
 private:
-    bool _is_inited = false;
+    bool _is_inited              = false;
+    volatile bool _is_tx_pending = false;
 
     bool lora_init();
     void lora_update();
