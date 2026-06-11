@@ -28,6 +28,7 @@ void Hal::init()
     mclog::tagInfo(_tag, "init");
 
     M5.begin();
+    ensureCardputerAdvI2C();
     M5.Display.setBrightness(0);
     M5.Speaker.begin();  // Codec takes some time to initialize
 
@@ -78,6 +79,17 @@ void Hal::display_init()
 /* -------------------------------------------------------------------------- */
 /*                                     I2C                                    */
 /* -------------------------------------------------------------------------- */
+void Hal::ensureCardputerAdvI2C()
+{
+    if (M5.In_I2C.getPort() != HAL_I2C_ADV_PORT || M5.In_I2C.getSDA() != HAL_PIN_ADV_I2C_SDA ||
+        M5.In_I2C.getSCL() != HAL_PIN_ADV_I2C_SCL) {
+        mclog::tagWarn(_tag, "force Cardputer ADV I2C to SDA G{} / SCL G{}", static_cast<int>(HAL_PIN_ADV_I2C_SDA),
+                       static_cast<int>(HAL_PIN_ADV_I2C_SCL));
+    }
+
+    M5.In_I2C.begin(HAL_I2C_ADV_PORT, HAL_PIN_ADV_I2C_SDA, HAL_PIN_ADV_I2C_SCL);
+}
+
 void Hal::i2c_scan()
 {
     mclog::tagInfo(_tag, "i2c scan");

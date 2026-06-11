@@ -41,7 +41,7 @@ private:
         // 1 ~ 4
         uint8_t bat_state     = 1;
         std::string bat_level = "100%";
-        std::string time      = "12:34";
+        std::string time      = "12:34:56";
     };
 
     struct Data_t {

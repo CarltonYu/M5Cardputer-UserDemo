@@ -22,7 +22,14 @@ private:
         IDLE,
         RECORDING,
         SENDING,
+        RECEIVING,
         PLAYING,
+    };
+
+    enum class LastRecordDirection {
+        NONE,
+        SENT,
+        RECEIVED,
     };
 
     static constexpr size_t SAMPLE_RATE            = 8000;
@@ -38,6 +45,11 @@ private:
     static constexpr size_t CONTROL_PACKET_SIZE      = 8;
     static constexpr uint8_t CONTROL_BUSY            = 1;
     static constexpr uint8_t CONTROL_FREE            = 2;
+    static constexpr size_t WAVEFORM_SAMPLE_COUNT    = 200;
+    static constexpr uint32_t UI_FRAME_INTERVAL_MS   = 50;
+    static constexpr uint32_t IDLE_REFRESH_MS        = 1000;
+    static constexpr uint8_t DEFAULT_PLAYBACK_VOLUME = 255;
+    static constexpr uint8_t PLAYBACK_VOLUME_STEP    = 16;
 
     State _state = State::IDLE;
 
@@ -47,6 +59,9 @@ private:
     int8_t* _rx_buffer   = nullptr;
     size_t _rx_voice_len = 0;
     bool _rx_pending     = false;
+
+    int8_t* _last_voice_buffer = nullptr;
+    size_t _last_voice_len     = 0;
 
     uint8_t _tx_msg_id            = 0;
     size_t _tx_current_seq        = 0;
@@ -65,10 +80,20 @@ private:
     int _lora_slot_id            = -1;
     int _key_slot_id             = -1;
     uint32_t _record_start_time  = 0;
+    uint32_t _play_start_time    = 0;
+    uint32_t _last_ui_frame_time = 0;
+    size_t _play_sample_count    = 0;
+    bool _is_replaying_last      = false;
     uint32_t _last_activity_time = 0;
     uint32_t _remote_busy_until  = 0;
     uint8_t _device_id[3]        = {};
     uint8_t _busy_owner[3]       = {};
+    LastRecordDirection _last_record_direction = LastRecordDirection::NONE;
+    uint32_t _last_record_time                 = 0;
+    size_t _last_record_packet_count           = 0;
+    bool _last_record_complete                 = true;
+    uint8_t _playback_volume                   = DEFAULT_PLAYBACK_VOLUME;
+    int8_t _tx_power                           = CapLoRa868::lora_config::power;
 
     void onKeyEvent(const Keyboard::KeyEvent_t& keyEvent);
     void onLoraData(const std::string& data);
@@ -86,16 +111,36 @@ private:
     bool sendControlPacket(uint8_t type);
     bool isControlPacket(const uint8_t* bytes, size_t len) const;
     void handleControlPacket(const uint8_t* bytes, size_t len);
+    size_t getReceivedPacketCount() const;
+    float getSendProgress() const;
+    float getReceiveProgress() const;
+    void setLastRecord(LastRecordDirection direction, size_t packet_count, bool complete);
+    void formatDuration(char* buffer, size_t buffer_size, uint32_t duration_ms) const;
     void finishSending();
+    void saveLastVoiceFromPcm(const int16_t* samples, size_t sample_count);
+    void saveLastVoiceFromBytes(const int8_t* samples, size_t sample_count);
+    bool playLastVoice();
+    bool handleSettingsKey(const Keyboard::KeyEvent_t& keyEvent);
+    void adjustPlaybackVolume(int delta);
+    void adjustTxPower(int delta);
+    uint8_t getPlaybackVolumePercent() const;
 
     void startRecording();
     void stopRecordingAndSend();
+    void silenceSpeaker();
+    void prepareSpeakerForPlayback();
     bool sendNextPacket();
     void tryPlayReceived();
 
     void renderIdle();
     void renderRecording();
     void renderSending();
+    void renderReceiving();
     void renderPlaying();
+    void renderCurrentState();
+    void renderSettingsStatus(int y);
+    void renderLastRecord();
     void renderWaveform();
+    void drawWaveformSamples(const int16_t* samples, size_t sample_count, uint32_t color);
+    void drawProgressBar(float progress, uint32_t color);
 };

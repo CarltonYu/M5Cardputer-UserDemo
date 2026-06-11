@@ -17,6 +17,7 @@
 #include "app_clock/app_clock.h"
 #include "app_keyboard/app_keyboard.h"
 #include "app_imu/app_imu.h"
+#include "app_compass/app_compass.h"
 #include "app_sdcard/app_sdcard.h"
 #include "app_lora_chat/app_lora_chat.h"
 #include "app_lora_voice_chat/app_lora_voice_chat.h"

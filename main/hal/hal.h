@@ -18,6 +18,7 @@ class Hal {
 public:
     void init();
     void update();
+    void ensureCardputerAdvI2C();
 
     /* --------------------------------- System --------------------------------- */
     void delay(std::uint32_t ms)

@@ -22,11 +22,18 @@ public:
         static constexpr uint8_t cr              = 5;
         static constexpr uint8_t syncWord        = 0x34;
         static constexpr int8_t power            = 10;
+        static constexpr int8_t minPower         = -9;
+        static constexpr int8_t maxPower         = 22;
         static constexpr uint16_t preambleLength = 10;
     };
 
     bool loraSendMsg(const std::string& msg);
     bool loraSendBytes(const uint8_t* data, size_t len);
+    bool setTxPower(int8_t power);
+    int8_t getTxPower() const
+    {
+        return _tx_power;
+    }
     bool isTxDone() const;
     mclog::Signal<const std::string&> onLoraMsg;
 
@@ -36,7 +43,10 @@ public:
 
 private:
     bool _is_inited              = false;
+    bool _is_lora_inited         = false;
+    bool _is_gps_inited          = false;
     volatile bool _is_tx_pending = false;
+    int8_t _tx_power             = lora_config::power;
 
     bool lora_init();
     void lora_update();

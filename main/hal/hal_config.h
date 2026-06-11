@@ -13,6 +13,9 @@
 #define HAL_PIN_SD_CARD_CS     GPIO_NUM_12
 #define HAL_PIN_GPS_TX         GPIO_NUM_13
 #define HAL_PIN_GPS_RX         GPIO_NUM_15
+#define HAL_PIN_ADV_I2C_SDA    GPIO_NUM_8
+#define HAL_PIN_ADV_I2C_SCL    GPIO_NUM_9
+#define HAL_I2C_ADV_PORT       I2C_NUM_1
 #define HAL_PIN_LORA_NSS_GPIO  5
 #define HAL_PIN_LORA_RST_GPIO  3
 #define HAL_PIN_LORA_BUSY_GPIO 6

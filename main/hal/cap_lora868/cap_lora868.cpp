@@ -23,21 +23,22 @@ bool CapLoRa868::init()
         return true;
     }
 
-    if (!lora_init()) {
+    // Start GPS first so the GNSS UART can settle while the SX1262 is being reset/configured.
+    if (!_is_gps_inited && !gps_init()) {
         return false;
     }
 
-    if (!gps_init()) {
+    if (!_is_lora_inited && !lora_init()) {
         return false;
     }
 
-    _is_inited = true;
-    return true;
+    _is_inited = _is_gps_inited && _is_lora_inited;
+    return _is_inited;
 }
 
 void CapLoRa868::update()
 {
-    if (!_is_inited) {
+    if (!_is_lora_inited) {
         return;
     }
 
@@ -81,6 +82,10 @@ bool CapLoRa868::lora_init()
 {
     mclog::tagInfo(_tag, "lora init");
 
+    if (_is_lora_inited) {
+        return true;
+    }
+
     // Create hal
     spi_host_device_t spi_host = SDSPI_DEFAULT_HOST;
     _radio_lib.hal = std::make_unique<EspHal>(HAL_PIN_SPI_SCLK, HAL_PIN_SPI_MISO, HAL_PIN_SPI_MOSI, spi_host, true);
@@ -96,6 +101,7 @@ bool CapLoRa868::lora_init()
                                  lora_config::syncWord, lora_config::power, lora_config::preambleLength, 3.0, false);
     if (state == RADIOLIB_ERR_NONE) {
         mclog::tagInfo(_tag, "sx1262 init success");
+        _tx_power = lora_config::power;
     } else {
         mclog::tagError(_tag, "sx1262 init failed, code {}", state);
         goto HANDLE_ERROR;
@@ -115,9 +121,11 @@ bool CapLoRa868::lora_init()
         goto HANDLE_ERROR;
     }
 
+    _is_lora_inited = true;
     return true;
 
 HANDLE_ERROR:
+    _is_lora_inited = false;
     _radio_lib.reset();
     return false;
 }
@@ -155,7 +163,7 @@ void CapLoRa868::lora_update()
 
 bool CapLoRa868::loraSendMsg(const std::string& msg)
 {
-    if (!_is_inited || _is_tx_pending) {
+    if (!_is_lora_inited || _is_tx_pending) {
         return false;
     }
 
@@ -171,6 +179,29 @@ bool CapLoRa868::loraSendMsg(const std::string& msg)
     return true;
 }
 
+bool CapLoRa868::setTxPower(int8_t power)
+{
+    if (!_is_lora_inited || !_radio_lib.sx1262 || _is_tx_pending) {
+        return false;
+    }
+
+    if (power < lora_config::minPower) {
+        power = lora_config::minPower;
+    } else if (power > lora_config::maxPower) {
+        power = lora_config::maxPower;
+    }
+
+    int state = _radio_lib.sx1262->setOutputPower(power);
+    if (state != RADIOLIB_ERR_NONE) {
+        mclog::tagError(_tag, "set tx power failed, power {}dBm, code {}", power, state);
+        return false;
+    }
+
+    _tx_power = power;
+    mclog::tagInfo(_tag, "tx power set to {}dBm", _tx_power);
+    return true;
+}
+
 bool CapLoRa868::isTxDone() const
 {
     return !_is_tx_pending;
@@ -178,7 +209,7 @@ bool CapLoRa868::isTxDone() const
 
 bool CapLoRa868::loraSendBytes(const uint8_t* data, size_t len)
 {
-    if (!_is_inited || _is_tx_pending) {
+    if (!_is_lora_inited || _is_tx_pending) {
         return false;
     }
 
@@ -207,6 +238,9 @@ void _handle_gps_msg(const char* msg)
     // mclog::tagDebug(_tag, "on gps msg:\n{}", msg);
 
     std::lock_guard<std::mutex> lock(_gps_mutex);
+    if (!_gps) {
+        return;
+    }
 
     const char* p = msg;
     while (*p) {
@@ -220,11 +254,20 @@ bool CapLoRa868::gps_init()
 {
     mclog::tagInfo(_tag, "gps init");
 
-    _gps = std::make_unique<TinyGPSPlus>();
+    if (_is_gps_inited) {
+        return true;
+    }
 
-    gps_uart_helper_init();
+    {
+        std::lock_guard<std::mutex> lock(_gps_mutex);
+        if (!_gps) {
+            _gps = std::make_unique<TinyGPSPlus>();
+        }
+    }
     gps_uart_helper_set_on_msg_callback(_handle_gps_msg);
+    gps_uart_helper_init();
 
+    _is_gps_inited = true;
     return true;
 }
 
