@@ -1,0 +1,122 @@
+menu "ESP32S3N16R8 User Demo Port"
+
+    menu "ST7789 LCD"
+
+        config LCD_PIN_MOSI
+            int "LCD MOSI/SDA GPIO"
+            range -1 48
+            default 11
+
+        config LCD_PIN_SCLK
+            int "LCD SCLK/SCL GPIO"
+            range -1 48
+            default 12
+
+        config LCD_PIN_CS
+            int "LCD CS GPIO"
+            range -1 48
+            default 10
+
+        config LCD_PIN_DC
+            int "LCD DC GPIO"
+            range -1 48
+            default 9
+
+        config LCD_PIN_RST
+            int "LCD RST/RES GPIO"
+            range -1 48
+            default 8
+
+        config LCD_PIN_BL
+            int "LCD BL/BLK GPIO"
+            range -1 48
+            default 7
+
+        config LCD_SPI_CLOCK_HZ
+            int "LCD SPI pixel clock Hz"
+            range 1000000 80000000
+            default 40000000
+
+        config LCD_BACKLIGHT_ACTIVE_HIGH
+            bool "LCD backlight is active high"
+            default y
+
+        config LCD_BGR_COLOR
+            bool "Use BGR color element order"
+            default n
+
+        config LCD_INVERT_COLOR
+            bool "Invert ST7789 colors"
+            default n
+
+        config LCD_SWAP_XY
+            bool "Swap LCD X/Y axes for landscape"
+            default y
+
+        config LCD_MIRROR_X
+            bool "Mirror LCD X axis"
+            default y
+
+        config LCD_MIRROR_Y
+            bool "Mirror LCD Y axis"
+            default n
+
+        config LCD_GAP_X
+            int "LCD X offset/gap"
+            range 0 80
+            default 0
+
+        config LCD_GAP_Y
+            int "LCD Y offset/gap"
+            range 0 80
+            default 0
+
+    endmenu
+
+    menu "EC11 Rotary Encoder And Buttons"
+
+        config ENCODER_PIN_A
+            int "EC11 A GPIO"
+            range 0 48
+            default 4
+
+        config ENCODER_PIN_B
+            int "EC11 B GPIO"
+            range 0 48
+            default 5
+
+        config ENCODER_PIN_PUSH
+            int "EC11 push GPIO"
+            range -1 48
+            default 6
+
+        config BUTTON_OK_PIN
+            int "OK button GPIO"
+            range -1 48
+            default 3
+
+        config INPUT_ACTIVE_LOW
+            bool "Buttons/encoder use active-low inputs with internal pull-ups"
+            default y
+
+        config ENCODER_REVERSE
+            bool "Reverse EC11 rotation direction"
+            default n
+
+        config BUTTON_DEBOUNCE_MS
+            int "Button debounce time ms"
+            range 5 100
+            default 25
+
+    endmenu
+
+    menu "ESP-NOW Chat"
+
+        config ESPNOW_CHANNEL
+            int "ESP-NOW Wi-Fi channel"
+            range 1 14
+            default 1
+
+    endmenu
+
+endmenu
