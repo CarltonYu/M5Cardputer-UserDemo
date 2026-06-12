@@ -30,6 +30,7 @@ public:
     void drawRect(int x, int y, int w, int h, Color color);
     void fillRect(int x, int y, int w, int h, Color color);
     void drawRgb565Image(int x, int y, int w, int h, const std::uint16_t* data);
+    void drawRgb565ImageScaled(int x, int y, int src_w, int src_h, int dst_w, int dst_h, const std::uint16_t* data);
     void drawCircle(int cx, int cy, int radius, Color color);
     void fillCircle(int cx, int cy, int radius, Color color);
     void fillRoundRect(int x, int y, int w, int h, int radius, Color color);

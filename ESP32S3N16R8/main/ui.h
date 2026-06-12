@@ -44,6 +44,10 @@ private:
     int chat_preset_        = 0;
     std::uint32_t frame_    = 0;
     std::int64_t next_tick_us_ = 0;
+    std::int64_t last_update_us_ = 0;
+    float selector_pos_     = 1.0f;
+    float selector_vel_     = 0.0f;
+    float selector_target_  = 1.0f;
     std::vector<ChatLine> chat_lines_;
     char status_[64] = "READY";
 

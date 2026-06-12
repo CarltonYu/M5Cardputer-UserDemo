@@ -375,6 +375,30 @@ void LcdSt7789::drawRgb565Image(int x, int y, int w, int h, const std::uint16_t*
     }
 }
 
+void LcdSt7789::drawRgb565ImageScaled(int x, int y, int src_w, int src_h, int dst_w, int dst_h,
+                                      const std::uint16_t* data)
+{
+    if (!frame_ || !data || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0) {
+        return;
+    }
+
+    const int x0 = std::max(0, x);
+    const int y0 = std::max(0, y);
+    const int x1 = std::min(kWidth, x + dst_w);
+    const int y1 = std::min(kHeight, y + dst_h);
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
+
+    for (int row = y0; row < y1; ++row) {
+        const int src_y = (row - y) * src_h / dst_h;
+        for (int col = x0; col < x1; ++col) {
+            const int src_x          = (col - x) * src_w / dst_w;
+            frame_[row * kWidth + col] = data[src_y * src_w + src_x];
+        }
+    }
+}
+
 void LcdSt7789::drawCircle(int cx, int cy, int radius, Color color)
 {
     if (radius <= 0) {

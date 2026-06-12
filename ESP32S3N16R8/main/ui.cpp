@@ -1,6 +1,7 @@
 #include "ui.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 #include "esp_err.h"
@@ -65,11 +66,14 @@ constexpr int kMainX            = kKeyboardBarW;
 constexpr int kMainY            = kSystemBarH;
 constexpr int kMainW            = LcdSt7789::kWidth - kKeyboardBarW;
 constexpr int kMainH            = LcdSt7789::kHeight - kSystemBarH;
-constexpr int kIconW            = 48;
-constexpr int kIconGap          = 20;
-constexpr int kSelectedIconW    = 64;
-constexpr int kIconMarginTop    = 56;
-constexpr int kIconTagMarginTop = 8;
+constexpr int kSideIconW        = 72;
+constexpr int kCenterIconW      = 100;
+constexpr int kIconW            = kSideIconW;
+constexpr int kSideImageW       = 56;
+constexpr int kCenterImageW     = 80;
+constexpr int kIconGap          = 16;
+constexpr int kIconMarginTop    = 48;
+constexpr int kIconTagMarginTop = 12;
 
 constexpr LcdSt7789::Color kBg              = LcdSt7789::rgb(0x33, 0x33, 0x33);
 constexpr LcdSt7789::Color kSystemBar       = LcdSt7789::rgb(0x99, 0xFF, 0x00);
@@ -159,8 +163,12 @@ std::string truncateToFit(LcdSt7789& lcd, const std::string& text, int max_width
 void DemoUi::begin()
 {
     selected_ = wrapIndex(1, kAppCount);
+    selector_pos_    = static_cast<float>(selected_);
+    selector_target_ = selector_pos_;
+    selector_vel_    = 0.0f;
     chat_lines_.reserve(12);
     setStatus("READY");
+    last_update_us_ = esp_timer_get_time();
 }
 
 bool DemoUi::update()
@@ -181,6 +189,25 @@ bool DemoUi::update()
         redraw        = true;
     }
 
+    if (page_ == Page::kLauncher) {
+        const float dt = (now - last_update_us_) / 1000000.0f;
+        if (dt > 0.0f) {
+            if (dt > 0.05f) {
+                selector_vel_ = 0.0f;
+            } else {
+                const float acceleration =
+                    -200.0f * (selector_pos_ - selector_target_) - 18.0f * selector_vel_;
+                selector_vel_ += acceleration * dt;
+                selector_pos_ += selector_vel_ * dt;
+            }
+        }
+        if (std::abs(selector_pos_ - selector_target_) > 0.01f ||
+            std::abs(selector_vel_) > 0.01f) {
+            redraw = true;
+        }
+    }
+
+    last_update_us_ = now;
     return redraw;
 }
 
@@ -190,6 +217,14 @@ bool DemoUi::handleEvent(const InputEvent& event)
         case InputType::kRotateLeft:
             if (page_ == Page::kLauncher) {
                 selected_ = wrapIndex(selected_ - 1, kAppCount);
+                float raw_target = static_cast<float>(selected_);
+                while (raw_target - selector_pos_ > kAppCount / 2.0f) {
+                    raw_target -= kAppCount;
+                }
+                while (selector_pos_ - raw_target > kAppCount / 2.0f) {
+                    raw_target += kAppCount;
+                }
+                selector_target_ = raw_target;
                 setStatus("LEFT");
             } else if (page_ == Page::kChat) {
                 chat_preset_ = wrapIndex(chat_preset_ - 1, kChatPresetCount);
@@ -200,6 +235,14 @@ bool DemoUi::handleEvent(const InputEvent& event)
         case InputType::kRotateRight:
             if (page_ == Page::kLauncher) {
                 selected_ = wrapIndex(selected_ + 1, kAppCount);
+                float raw_target = static_cast<float>(selected_);
+                while (raw_target - selector_pos_ > kAppCount / 2.0f) {
+                    raw_target -= kAppCount;
+                }
+                while (selector_pos_ - raw_target > kAppCount / 2.0f) {
+                    raw_target += kAppCount;
+                }
+                selector_target_ = raw_target;
                 setStatus("RIGHT");
             } else if (page_ == Page::kChat) {
                 chat_preset_ = wrapIndex(chat_preset_ + 1, kChatPresetCount);
@@ -233,8 +276,6 @@ void DemoUi::render()
 {
     ++frame_;
     lcd_.clear(kBg);
-    drawKeyboardBar();
-    drawSystemBar();
 
     if (page_ == Page::kLauncher) {
         renderLauncher();
@@ -244,6 +285,9 @@ void DemoUi::render()
         renderPlaceholder();
     }
 
+    drawKeyboardBar();
+    drawSystemBar();
+
     (void)lcd_.flush();
 }
 
@@ -251,21 +295,29 @@ void DemoUi::renderLauncher()
 {
     lcd_.fillRect(kMainX, kMainY, kMainW, kMainH, kBg);
 
-    for (int offset = -3; offset <= 3; ++offset) {
-        const int item_index = wrapIndex(selected_ + offset, kAppCount);
-        const int base_x     = kIconGap + item_index * (kIconW + kIconGap);
-        const int selected_base_x = kIconGap + selected_ * (kIconW + kIconGap);
-        const int x_offset = -selected_base_x + kMainW / 2 - kIconW / 2;
-        const int tile_x   = kMainX + base_x + x_offset;
-        const bool active  = item_index == selected_;
+    const int center_x = kMainX + kMainW / 2 - kIconW / 2;
+    const int center_y = kMainY + kIconMarginTop;
+    const int side_y   = center_y + (kCenterIconW - kSideIconW) / 2;
 
-        if (tile_x < kMainX - kSelectedIconW || tile_x > kMainX + kMainW + kSelectedIconW) {
+    for (int i = 0; i < kAppCount; ++i) {
+        float index_offset = static_cast<float>(i) - selector_pos_;
+        while (index_offset > kAppCount / 2.0f) {
+            index_offset -= kAppCount;
+        }
+        while (index_offset < -kAppCount / 2.0f) {
+            index_offset += kAppCount;
+        }
+
+        const int tile_x = center_x + static_cast<int>(index_offset * (kIconW + kIconGap));
+        const bool active = (i == selected_);
+
+        if (tile_x + kSideIconW < kMainX || tile_x >= kMainX + kMainW) {
             continue;
         }
-        drawIconTile(item_index, tile_x, kMainY + kIconMarginTop, active);
-    }
 
-    lcd_.drawText(kMainX + 10, LcdSt7789::kHeight - 16, status_, kMuted, 1);
+        const int tile_y = active ? center_y : side_y;
+        drawIconTile(i, tile_x, tile_y, active);
+    }
 }
 
 void DemoUi::renderChat()
@@ -312,10 +364,12 @@ void DemoUi::renderPlaceholder()
     const AppEntry& app = kApps[selected_];
     lcd_.fillRect(kMainX, kMainY, kMainW, kMainH, kBg);
 
-    const int tile_x = kMainX + kMainW / 2 - kSelectedIconW / 2;
+    const int tile_x = kMainX + kMainW / 2 - kCenterIconW / 2;
     const int tile_y = kMainY + 48;
-    lcd_.fillRoundRect(tile_x, tile_y, kSelectedIconW, kSelectedIconW, 8, kIconBg);
-    lcd_.drawRgb565Image(tile_x + 4, tile_y + 4, 56, 56, app.icon_big);
+    lcd_.fillRoundRect(tile_x, tile_y, kCenterIconW, kCenterIconW, 8, kIconBg);
+    lcd_.drawRgb565ImageScaled(tile_x + (kCenterIconW - kCenterImageW) / 2,
+                               tile_y + (kCenterIconW - kCenterImageW) / 2,
+                               56, 56, kCenterImageW, kCenterImageW, app.icon_big);
 
     drawCenteredText(kMainX, tile_y + 78, kMainW, app.name, kIconBg, 2);
     drawCenteredText(kMainX, tile_y + 102, kMainW, "PORT PENDING", kMuted, 1);
@@ -364,15 +418,15 @@ void DemoUi::drawIconTile(int item_index, int x, int y, bool active)
 {
     const AppEntry& app = kApps[wrapIndex(item_index, kAppCount)];
     if (active) {
-        lcd_.fillRoundRect(x - (kSelectedIconW - kIconW) / 2, y - (kSelectedIconW - kIconW) / 2, kSelectedIconW,
-                           kSelectedIconW, 8, kIconBg);
-        drawIconImage(item_index, x - (kSelectedIconW - kIconW) / 2 + 4, y - (kSelectedIconW - kIconW) / 2 + 4, true);
-        drawCenteredText(kMainX, y + kIconW + kIconTagMarginTop + (kSelectedIconW - kIconW) / 2, kMainW, app.name,
-                         kIconBg, 2);
+        lcd_.fillRoundRect(x, y, kCenterIconW, kCenterIconW, 12, kIconBg);
+        drawIconImage(item_index, x + (kCenterIconW - kCenterImageW) / 2,
+                      y + (kCenterIconW - kCenterImageW) / 2, true);
+        drawCenteredText(kMainX, y + kCenterIconW + kIconTagMarginTop, kMainW, app.name, kIconBg, 2);
     } else {
-        lcd_.fillRoundRect(x, y, kIconW, kIconW, 8, kIconBg);
-        drawIconImage(item_index, x + 4, y + 4, false);
-        drawCenteredText(x - 16, y + kIconW + kIconTagMarginTop, kIconW + 32, app.name, kIconBg, 1);
+        lcd_.fillRoundRect(x, y, kSideIconW, kSideIconW, 10, kIconBg);
+        drawIconImage(item_index, x + (kSideIconW - kSideImageW) / 2,
+                      y + (kSideIconW - kSideImageW) / 2, false);
+        drawCenteredText(x, y + kSideIconW + kIconTagMarginTop, kSideIconW, app.name, kIconBg, 1);
     }
 }
 
@@ -380,9 +434,9 @@ void DemoUi::drawIconImage(int item_index, int x, int y, bool active)
 {
     const AppEntry& app = kApps[wrapIndex(item_index, kAppCount)];
     if (active) {
-        lcd_.drawRgb565Image(x, y, 56, 56, app.icon_big);
+        lcd_.drawRgb565ImageScaled(x, y, 56, 56, kCenterImageW, kCenterImageW, app.icon_big);
     } else {
-        lcd_.drawRgb565Image(x, y, 40, 40, app.icon_small);
+        lcd_.drawRgb565ImageScaled(x, y, 56, 56, kSideImageW, kSideImageW, app.icon_big);
     }
 }
 
