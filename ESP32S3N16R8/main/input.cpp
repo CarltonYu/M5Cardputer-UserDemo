@@ -10,6 +10,10 @@ namespace {
 
 constexpr const char* kTag = "input";
 
+#ifndef CONFIG_ENCODER_REVERSE
+#define CONFIG_ENCODER_REVERSE 0
+#endif
+
 #if CONFIG_INPUT_ACTIVE_LOW
 constexpr bool kInputActiveLow = true;
 #else
@@ -111,6 +115,29 @@ esp_err_t RotaryInput::init()
     if (err != ESP_OK) {
         return err;
     }
+
+    // Use GPIO interrupts to catch every A/B edge, even during fast rotation.
+    err = gpio_install_isr_service(ESP_INTR_FLAG_LEVEL1);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        return err;
+    }
+    err = gpio_set_intr_type(static_cast<gpio_num_t>(CONFIG_ENCODER_PIN_A), GPIO_INTR_ANYEDGE);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = gpio_set_intr_type(static_cast<gpio_num_t>(CONFIG_ENCODER_PIN_B), GPIO_INTR_ANYEDGE);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = gpio_isr_handler_add(static_cast<gpio_num_t>(CONFIG_ENCODER_PIN_A), encoderIsr, this);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = gpio_isr_handler_add(static_cast<gpio_num_t>(CONFIG_ENCODER_PIN_B), encoderIsr, this);
+    if (err != ESP_OK) {
+        return err;
+    }
+
     err = ok_.init(CONFIG_BUTTON_OK_PIN, kInputActiveLow, CONFIG_BUTTON_DEBOUNCE_MS);
     if (err != ESP_OK) {
         return err;
@@ -120,42 +147,100 @@ esp_err_t RotaryInput::init()
         return err;
     }
 
-    const int a    = gpio_get_level(static_cast<gpio_num_t>(CONFIG_ENCODER_PIN_A));
-    const int b    = gpio_get_level(static_cast<gpio_num_t>(CONFIG_ENCODER_PIN_B));
-    last_ab_state_ = (a << 1) | b;
-    encoder_ready_ = true;
+    const int a         = gpio_get_level(static_cast<gpio_num_t>(CONFIG_ENCODER_PIN_A));
+    const int b         = gpio_get_level(static_cast<gpio_num_t>(CONFIG_ENCODER_PIN_B));
+    isr_last_ab_state_  = (a << 1) | b;
+    encoder_ready_      = true;
 
     return ESP_OK;
+}
+
+void IRAM_ATTR RotaryInput::encoderIsr(void* arg)
+{
+    auto* self = static_cast<RotaryInput*>(arg);
+
+    const int a         = gpio_get_level(static_cast<gpio_num_t>(CONFIG_ENCODER_PIN_A));
+    const int b         = gpio_get_level(static_cast<gpio_num_t>(CONFIG_ENCODER_PIN_B));
+    const int state     = (a << 1) | b;
+    const int old_state = self->isr_last_ab_state_;
+    if (state == old_state) {
+        return;
+    }
+    self->isr_last_ab_state_ = state;
+
+    static constexpr int8_t transition_table[16] = {
+        0, -1, 1, 0,
+        1, 0, 0, -1,
+        -1, 0, 0, 1,
+        0, 1, -1, 0,
+    };
+
+    const int index     = (old_state << 2) | state;
+    int transition      = transition_table[index & 0x0F];
+#if CONFIG_ENCODER_REVERSE
+    transition = -transition;
+#endif
+
+    if (transition == 0) {
+        self->isr_accum_ = 0;
+        return;
+    }
+
+    // If direction flipped mid-detent, start a new run in the new direction.
+    if ((self->isr_accum_ > 0 && transition < 0) || (self->isr_accum_ < 0 && transition > 0)) {
+        self->isr_accum_ = transition;
+    } else {
+        self->isr_accum_ += transition;
+    }
+
+    if (self->isr_accum_ >= 4) {
+        self->isr_accum_ = 0;
+        if (self->isr_detent_dir_ == 1) {
+            ++self->isr_detent_count_;
+        } else {
+            self->isr_detent_dir_   = 1;
+            self->isr_detent_count_ = 1;
+        }
+    } else if (self->isr_accum_ <= -4) {
+        self->isr_accum_ = 0;
+        if (self->isr_detent_dir_ == -1) {
+            ++self->isr_detent_count_;
+        } else {
+            self->isr_detent_dir_   = -1;
+            self->isr_detent_count_ = 1;
+        }
+    }
 }
 
 void RotaryInput::update()
 {
     if (encoder_ready_) {
-        static constexpr int8_t transition_table[16] = {
-            0, -1, 1, 0,
-            1, 0, 0, -1,
-            -1, 0, 0, 1,
-            0, 1, -1, 0,
-        };
+        int count = 0;
+        int dir   = 0;
+        portENTER_CRITICAL(&isr_mux_);
+        count           = isr_detent_count_;
+        dir             = isr_detent_dir_;
+        isr_detent_count_ = 0;
+        isr_detent_dir_   = 0;
+        portEXIT_CRITICAL(&isr_mux_);
 
-        const int a      = gpio_get_level(static_cast<gpio_num_t>(CONFIG_ENCODER_PIN_A));
-        const int b      = gpio_get_level(static_cast<gpio_num_t>(CONFIG_ENCODER_PIN_B));
-        const int state  = (a << 1) | b;
-        const int index  = (last_ab_state_ << 2) | state;
-        int transition   = transition_table[index & 0x0F];
-        last_ab_state_   = state;
+        for (int i = 0; i < count; ++i) {
+            if (dir == last_detent_dir_) {
+                ++detent_count_;
+            } else {
+                last_detent_dir_ = dir;
+                detent_count_    = 1;
+            }
 
-#if CONFIG_ENCODER_REVERSE
-        transition = -transition;
-#endif
-
-        encoder_accum_ += transition;
-        if (encoder_accum_ >= 4) {
-            encoder_accum_ = 0;
-            pushEvent(InputType::kRotateRight);
-        } else if (encoder_accum_ <= -4) {
-            encoder_accum_ = 0;
-            pushEvent(InputType::kRotateLeft);
+            if (detent_count_ >= 2) {
+                if (dir > 0) {
+                    pushEvent(InputType::kRotateRight, 1);
+                } else {
+                    pushEvent(InputType::kRotateLeft, -1);
+                }
+                last_detent_dir_ = 0;
+                detent_count_    = 0;
+            }
         }
     }
 
@@ -183,7 +268,7 @@ bool RotaryInput::popEvent(InputEvent* event)
     return true;
 }
 
-void RotaryInput::pushEvent(InputType type)
+void RotaryInput::pushEvent(InputType type, int ticks)
 {
     const std::size_t next_head = (head_ + 1) % kQueueSize;
     if (next_head == tail_) {
@@ -192,6 +277,7 @@ void RotaryInput::pushEvent(InputType type)
 
     queue_[head_].type         = type;
     queue_[head_].timestamp_us = esp_timer_get_time();
+    queue_[head_].ticks        = ticks;
     head_ = next_head;
 }
 

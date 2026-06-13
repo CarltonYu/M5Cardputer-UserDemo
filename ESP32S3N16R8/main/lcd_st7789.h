@@ -6,6 +6,9 @@
 #include "esp_err.h"
 #include "esp_lcd_types.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
 namespace demo {
 
 class LcdSt7789 {
@@ -23,6 +26,8 @@ public:
 
     esp_err_t init();
     esp_err_t flush();
+
+    void notifyTransDoneFromIsr(BaseType_t* pxHigherPriorityTaskWoken);
 
     void clear(Color color);
     void drawPixel(int x, int y, Color color);
@@ -44,6 +49,7 @@ private:
     esp_lcd_panel_io_handle_t io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
     Color* frame_                 = nullptr;
+    SemaphoreHandle_t trans_done_sem_ = nullptr;
     bool initialized_             = false;
 };
 

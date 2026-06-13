@@ -9,6 +9,8 @@
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
@@ -20,6 +22,14 @@ namespace {
 
 constexpr const char* kTag       = "lcd";
 constexpr spi_host_device_t kSpi = SPI2_HOST;
+
+bool transDoneCallback(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t* edata, void* user_ctx)
+{
+    auto* lcd = static_cast<LcdSt7789*>(user_ctx);
+    BaseType_t high_task_wakeup = pdFALSE;
+    lcd->notifyTransDoneFromIsr(&high_task_wakeup);
+    return high_task_wakeup == pdTRUE;
+}
 
 #if CONFIG_LCD_BACKLIGHT_ACTIVE_HIGH
 constexpr int kBacklightOn  = 1;
@@ -194,6 +204,13 @@ esp_err_t LcdSt7789::init()
     }
     clear(rgb(8, 10, 14));
 
+    trans_done_sem_ = xSemaphoreCreateBinary();
+    if (!trans_done_sem_) {
+        ESP_LOGE(kTag, "failed to create transfer done semaphore");
+        return ESP_ERR_NO_MEM;
+    }
+    xSemaphoreTake(trans_done_sem_, 0);
+
     esp_err_t err = configureOutputPin(CONFIG_LCD_PIN_BL);
     if (err != ESP_OK) {
         return err;
@@ -228,6 +245,11 @@ esp_err_t LcdSt7789::init()
     if (err != ESP_OK) {
         return err;
     }
+
+    const esp_lcd_panel_io_callbacks_t cbs = {
+        .on_color_trans_done = transDoneCallback,
+    };
+    esp_lcd_panel_io_register_event_callbacks(io_, &cbs, this);
 
     esp_lcd_panel_dev_config_t panel_config = {};
     panel_config.reset_gpio_num             = CONFIG_LCD_PIN_RST;
@@ -274,12 +296,34 @@ esp_err_t LcdSt7789::init()
     return ESP_OK;
 }
 
+void LcdSt7789::notifyTransDoneFromIsr(BaseType_t* pxHigherPriorityTaskWoken)
+{
+    if (trans_done_sem_) {
+        xSemaphoreGiveFromISR(trans_done_sem_, pxHigherPriorityTaskWoken);
+    }
+}
+
 esp_err_t LcdSt7789::flush()
 {
-    if (!initialized_ || !panel_ || !frame_) {
+    if (!initialized_ || !panel_ || !frame_ || !trans_done_sem_) {
         return ESP_ERR_INVALID_STATE;
     }
-    return esp_lcd_panel_draw_bitmap(panel_, 0, 0, kWidth, kHeight, frame_);
+
+    // Drain any stale signal before starting a new transfer.
+    xSemaphoreTake(trans_done_sem_, 0);
+
+    const esp_err_t err = esp_lcd_panel_draw_bitmap(panel_, 0, 0, kWidth, kHeight, frame_);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    // Wait for the DMA color transfer to finish before allowing the next frame
+    // to overwrite the framebuffer. This avoids tearing.
+    if (xSemaphoreTake(trans_done_sem_, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(kTag, "flush timed out waiting for DMA done");
+    }
+
+    return ESP_OK;
 }
 
 void LcdSt7789::clear(Color color)

@@ -5,11 +5,18 @@ idf_component_register(
         "input.cpp"
         "espnow_chat.cpp"
         "ui.cpp"
+        "hal/hal.cpp"
+        "hal/i2c_bus.cpp"
+        "hal/keyboard/keyboard.cpp"
+        "hal/keyboard/tca8418.cpp"
+        "hal/audio/es8311.cpp"
+        "hal/imu/mpu6050.cpp"
     INCLUDE_DIRS "."
     REQUIRES
         esp_lcd
         esp_driver_gpio
         esp_driver_spi
+        esp_driver_i2c
         esp_timer
         esp_event
         esp_netif

@@ -2,6 +2,8 @@
 #include "lcd_st7789.h"
 #include "ui.h"
 
+#include "hal/hal.h"
+
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -33,6 +35,15 @@ extern "C" void app_main(void)
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
     }
+
+    err = demo::GetHal().init();
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "HAL init failed: %s", esp_err_to_name(err));
+        while (true) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+    }
+    demo::GetHal().i2cScan();
 
     ui.begin();
     ui.render();

@@ -45,9 +45,14 @@ private:
     std::uint32_t frame_    = 0;
     std::int64_t next_tick_us_ = 0;
     std::int64_t last_update_us_ = 0;
+    std::int64_t last_rotate_event_us_ = 0;
+    int fast_scroll_count_ = 0;
     float selector_pos_     = 1.0f;
     float selector_vel_     = 0.0f;
     float selector_target_  = 1.0f;
+
+    static constexpr std::int64_t kFastScrollThresholdUs = 80 * 1000LL;
+    static constexpr int kFastScrollMinCount = 2;
     std::vector<ChatLine> chat_lines_;
     char status_[64] = "READY";
 
@@ -60,6 +65,7 @@ private:
     void drawIconImage(int item_index, int x, int y, bool active);
     void drawCenteredText(int x, int y, int w, const char* text, LcdSt7789::Color color, int scale);
     void drawKeyboardPill(int y, const char* text, LcdSt7789::Color fill, LcdSt7789::Color text_color);
+    void handleRotateEvent(const InputEvent& event);
     void openSelected();
     void closeApp();
     void sendChatPreset();

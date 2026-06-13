@@ -189,17 +189,21 @@ bool DemoUi::update()
         redraw        = true;
     }
 
-    if (page_ == Page::kLauncher) {
-        const float dt = (now - last_update_us_) / 1000000.0f;
-        if (dt > 0.0f) {
-            if (dt > 0.05f) {
-                selector_vel_ = 0.0f;
-            } else {
-                const float acceleration =
-                    -200.0f * (selector_pos_ - selector_target_) - 18.0f * selector_vel_;
-                selector_vel_ += acceleration * dt;
-                selector_pos_ += selector_vel_ * dt;
-            }
+    if (page_ == Page::kLauncher && fast_scroll_count_ > 0 &&
+        now - last_rotate_event_us_ > kFastScrollThresholdUs) {
+        fast_scroll_count_ = 0;
+    }
+
+    const float dt = (now - last_update_us_) / 1000000.0f;
+    if (page_ == Page::kLauncher && dt >= 0.016f) {
+        last_update_us_ = now;
+        if (dt > 0.05f) {
+            selector_vel_ = 0.0f;
+        } else {
+            const float acceleration =
+                -200.0f * (selector_pos_ - selector_target_) - 18.0f * selector_vel_;
+            selector_vel_ += acceleration * dt;
+            selector_pos_ += selector_vel_ * dt;
         }
         if (std::abs(selector_pos_ - selector_target_) > 0.01f ||
             std::abs(selector_vel_) > 0.01f) {
@@ -207,7 +211,6 @@ bool DemoUi::update()
         }
     }
 
-    last_update_us_ = now;
     return redraw;
 }
 
@@ -215,39 +218,8 @@ bool DemoUi::handleEvent(const InputEvent& event)
 {
     switch (event.type) {
         case InputType::kRotateLeft:
-            if (page_ == Page::kLauncher) {
-                selected_ = wrapIndex(selected_ - 1, kAppCount);
-                float raw_target = static_cast<float>(selected_);
-                while (raw_target - selector_pos_ > kAppCount / 2.0f) {
-                    raw_target -= kAppCount;
-                }
-                while (selector_pos_ - raw_target > kAppCount / 2.0f) {
-                    raw_target += kAppCount;
-                }
-                selector_target_ = raw_target;
-                setStatus("LEFT");
-            } else if (page_ == Page::kChat) {
-                chat_preset_ = wrapIndex(chat_preset_ - 1, kChatPresetCount);
-                setStatus("PRESET");
-            }
-            return true;
-
         case InputType::kRotateRight:
-            if (page_ == Page::kLauncher) {
-                selected_ = wrapIndex(selected_ + 1, kAppCount);
-                float raw_target = static_cast<float>(selected_);
-                while (raw_target - selector_pos_ > kAppCount / 2.0f) {
-                    raw_target -= kAppCount;
-                }
-                while (selector_pos_ - raw_target > kAppCount / 2.0f) {
-                    raw_target += kAppCount;
-                }
-                selector_target_ = raw_target;
-                setStatus("RIGHT");
-            } else if (page_ == Page::kChat) {
-                chat_preset_ = wrapIndex(chat_preset_ + 1, kChatPresetCount);
-                setStatus("PRESET");
-            }
+            handleRotateEvent(event);
             return true;
 
         case InputType::kEncoderPressed:
@@ -270,6 +242,52 @@ bool DemoUi::handleEvent(const InputEvent& event)
     }
 
     return false;
+}
+
+void DemoUi::handleRotateEvent(const InputEvent& event)
+{
+    const std::int64_t now = esp_timer_get_time();
+    const std::int64_t dt  = now - last_rotate_event_us_;
+    last_rotate_event_us_   = now;
+
+    if (dt > 0 && dt < kFastScrollThresholdUs) {
+        ++fast_scroll_count_;
+    } else {
+        fast_scroll_count_ = 0;
+    }
+
+    int ticks = event.ticks;
+    if (ticks == 0) {
+        ticks = (event.type == InputType::kRotateRight) ? 1 : -1;
+    }
+
+    if (page_ == Page::kChat) {
+        chat_preset_ = wrapIndex(chat_preset_ + ticks, kChatPresetCount);
+        setStatus("PRESET");
+        return;
+    }
+
+    selected_ = wrapIndex(selected_ + ticks, kAppCount);
+
+    float raw_target        = static_cast<float>(selected_);
+    const float ring_length = kAppCount + 1.0f;
+    while (raw_target - selector_target_ > ring_length / 2.0f) {
+        raw_target -= ring_length;
+    }
+    while (selector_target_ - raw_target > ring_length / 2.0f) {
+        raw_target += ring_length;
+    }
+    selector_target_ = raw_target;
+
+    // During fast continuous rotation skip the spring animation and jump
+    // directly to the target, so every A/B edge is reflected immediately.
+    // Slow single steps keep the smooth animation.
+    if (fast_scroll_count_ >= kFastScrollMinCount) {
+        selector_pos_ = selector_target_;
+        selector_vel_ = 0.0f;
+    }
+
+    setStatus(ticks > 0 ? "RIGHT" : "LEFT");
 }
 
 void DemoUi::render()
@@ -299,19 +317,22 @@ void DemoUi::renderLauncher()
     const int center_y = kMainY + kIconMarginTop;
     const int side_y   = center_y + (kCenterIconW - kSideIconW) / 2;
 
+    const float ring_length = kAppCount + 1.0f;
     for (int i = 0; i < kAppCount; ++i) {
         float index_offset = static_cast<float>(i) - selector_pos_;
-        while (index_offset > kAppCount / 2.0f) {
-            index_offset -= kAppCount;
+        while (index_offset > ring_length / 2.0f) {
+            index_offset -= ring_length;
         }
-        while (index_offset < -kAppCount / 2.0f) {
-            index_offset += kAppCount;
+        while (index_offset < -ring_length / 2.0f) {
+            index_offset += ring_length;
         }
 
-        const int tile_x = center_x + static_cast<int>(index_offset * (kIconW + kIconGap));
+        const int base_x  = center_x + static_cast<int>(index_offset * (kIconW + kIconGap));
         const bool active = (i == selected_);
+        const int tile_w  = active ? kCenterIconW : kSideIconW;
+        const int tile_x  = active ? base_x - (tile_w - kIconW) / 2 : base_x;
 
-        if (tile_x + kSideIconW < kMainX || tile_x >= kMainX + kMainW) {
+        if (tile_x < kMainX || tile_x + tile_w > kMainX + kMainW) {
             continue;
         }
 
