@@ -5,12 +5,12 @@ menu "ESP32S3N16R8 User Demo Port"
         config HAL_I2C_SDA_GPIO
             int "Internal I2C SDA GPIO"
             range -1 48
-            default 8
+            default 17
 
         config HAL_I2C_SCL_GPIO
             int "Internal I2C SCL GPIO"
             range -1 48
-            default 9
+            default 18
 
         config HAL_I2C_FREQ_HZ
             int "Internal I2C clock frequency (Hz)"
@@ -29,8 +29,8 @@ menu "ESP32S3N16R8 User Demo Port"
 
         config HAL_KEYBOARD_INT_GPIO
             int "TCA8418 keyboard INT GPIO"
-            range 0 48
-            default 11
+            range -1 48
+            default 16
 
         config HAL_MPU6050_ADDR
             hex "MPU6050 I2C address"
