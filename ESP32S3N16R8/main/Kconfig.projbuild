@@ -173,8 +173,8 @@ menu "ESP32S3N16R8 User Demo Port"
 
         config SD_SPI_CLOCK_HZ
             int "SD card SPI clock Hz"
-            range 1000000 20000000
-            default 10000000
+            range 100000 20000000
+            default 100000
 
     endmenu
 
