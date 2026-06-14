@@ -11,6 +11,7 @@ idf_component_register(
         "hal/keyboard/tca8418.cpp"
         "hal/audio/es8311.cpp"
         "hal/imu/mpu6050.cpp"
+        "hal/sdcard/sdcard.cpp"
     INCLUDE_DIRS "."
     REQUIRES
         esp_lcd
@@ -22,6 +23,9 @@ idf_component_register(
         esp_netif
         esp_wifi
         nvs_flash
+        vfs
+        fatfs
+        sdmmc
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror=return-type)

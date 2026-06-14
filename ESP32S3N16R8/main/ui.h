@@ -23,6 +23,8 @@ private:
     enum class Page {
         kLauncher,
         kChat,
+        kWifiScan,
+        kSdcard,
         kPlaceholder,
     };
 
@@ -56,8 +58,23 @@ private:
     std::vector<ChatLine> chat_lines_;
     char status_[64] = "READY";
 
+    // Wi-Fi scan state.
+    bool wifi_inited_           = false;
+    bool wifi_scanning_         = false;
+    std::int64_t last_scan_us_  = 0;
+    std::vector<std::pair<int, std::string>> wifi_results_;  // {rssi, ssid}
+
+    // SD card state.
+    std::int64_t next_sd_probe_us_ = 0;
+    std::string sd_name_;
+    std::string sd_size_;
+    std::string sd_type_;
+    bool sd_mounted_ = false;
+
     void renderLauncher();
     void renderChat();
+    void renderWifiScan();
+    void renderSdcard();
     void renderPlaceholder();
     void drawSystemBar();
     void drawKeyboardBar();
@@ -69,6 +86,10 @@ private:
     void openSelected();
     void closeApp();
     void sendChatPreset();
+    void startWifiScan();
+    void stopWifiScan();
+    void performWifiScan();
+    void probeSdcard();
     void appendChatLine(const std::string& text, LineKind kind);
     void setStatus(const char* text);
 };

@@ -1,11 +1,18 @@
 #include "ui.h"
 
+#include "hal/hal.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 
 #include "esp_err.h"
 #include "esp_timer.h"
+#include "esp_log.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "esp_netif.h"
+#include "nvs_flash.h"
 
 #include "../../main/apps/app_chat/assets/chat_big.h"
 #include "../../main/apps/app_chat/assets/chat_small.h"
@@ -50,6 +57,8 @@ namespace {
 enum class AppKind {
     kPlaceholder,
     kChat,
+    kWifiScan,
+    kSdcard,
 };
 
 struct AppEntry {
@@ -87,10 +96,11 @@ constexpr LcdSt7789::Color kMuted           = LcdSt7789::rgb(0xA8, 0xA8, 0xA8);
 constexpr LcdSt7789::Color kGreen           = LcdSt7789::rgb(0x00, 0xFF, 0x66);
 constexpr LcdSt7789::Color kCyan            = LcdSt7789::rgb(0x00, 0xE8, 0xFF);
 constexpr LcdSt7789::Color kOrange          = LcdSt7789::rgb(0xFF, 0xB0, 0x22);
+constexpr LcdSt7789::Color kYellow          = LcdSt7789::rgb(0xFF, 0xFF, 0x00);
 constexpr LcdSt7789::Color kRed             = LcdSt7789::rgb(0xFF, 0x60, 0x60);
 
 const AppEntry kApps[] = {
-    {"Scan", "WiFi", image_data_scan_big, image_data_scan_small, AppKind::kPlaceholder},
+    {"Scan", "WiFi", image_data_scan_big, image_data_scan_small, AppKind::kWifiScan},
     {"Record", "Audio", image_data_record_big, image_data_record_small, AppKind::kPlaceholder},
     {"Chat", "ESP NOW", image_data_chat_big, image_data_chat_small, AppKind::kChat},
     {"Remote", "IR", image_data_ir_big, image_data_ir_small, AppKind::kPlaceholder},
@@ -100,7 +110,7 @@ const AppEntry kApps[] = {
     {"Keyboard", "HID", image_data_keyboard_big, image_data_keyboard_small, AppKind::kPlaceholder},
     {"IMU", "Motion", image_data_imu_big, image_data_imu_small, AppKind::kPlaceholder},
     {"Compass", "I2C", image_data_imu_big, image_data_imu_small, AppKind::kPlaceholder},
-    {"SDCard", "TF", image_data_tf_big, image_data_tf_small, AppKind::kPlaceholder},
+    {"SDCard", "TF", image_data_tf_big, image_data_tf_small, AppKind::kSdcard},
     {"StringIR", "Tool", image_data_stringir_toolkit_big, image_data_stringir_toolkit_small, AppKind::kPlaceholder},
     {"LoRaChat", "868", image_data_chat_lora_big, image_data_chat_lora_small, AppKind::kPlaceholder},
     {"LoRaVoice", "Voice", image_data_lora_voice_big, image_data_lora_voice_small, AppKind::kPlaceholder},
@@ -179,6 +189,24 @@ bool DemoUi::update()
         std::string received;
         while (chat_.receive(&received)) {
             appendChatLine(printableAscii(received), LineKind::kReceived);
+            redraw = true;
+        }
+    }
+
+    if (page_ == Page::kWifiScan) {
+        const std::int64_t now = esp_timer_get_time();
+        if (!wifi_scanning_ && now - last_scan_us_ > 5 * 1000 * 1000LL) {
+            performWifiScan();
+            redraw       = true;
+            last_scan_us_ = now;
+        }
+    }
+
+    if (page_ == Page::kSdcard) {
+        const std::int64_t now = esp_timer_get_time();
+        if (now >= next_sd_probe_us_) {
+            next_sd_probe_us_ = now + 2 * 1000 * 1000LL;
+            probeSdcard();
             redraw = true;
         }
     }
@@ -299,6 +327,10 @@ void DemoUi::render()
         renderLauncher();
     } else if (page_ == Page::kChat) {
         renderChat();
+    } else if (page_ == Page::kWifiScan) {
+        renderWifiScan();
+    } else if (page_ == Page::kSdcard) {
+        renderSdcard();
     } else {
         renderPlaceholder();
     }
@@ -490,6 +522,15 @@ void DemoUi::openSelected()
             appendChatLine(text, LineKind::kSystem);
             setStatus("CHAT FAIL");
         }
+    } else if (app.kind == AppKind::kWifiScan) {
+        page_ = Page::kWifiScan;
+        setStatus("SCAN");
+        startWifiScan();
+    } else if (app.kind == AppKind::kSdcard) {
+        page_ = Page::kSdcard;
+        setStatus("SDCARD");
+        next_sd_probe_us_ = 0;
+        probeSdcard();
     } else {
         page_ = Page::kPlaceholder;
         setStatus(app.subtitle);
@@ -498,6 +539,9 @@ void DemoUi::openSelected()
 
 void DemoUi::closeApp()
 {
+    if (page_ == Page::kWifiScan) {
+        stopWifiScan();
+    }
     page_ = Page::kLauncher;
     setStatus("BACK");
 }
@@ -528,6 +572,173 @@ void DemoUi::appendChatLine(const std::string& text, LineKind kind)
 void DemoUi::setStatus(const char* text)
 {
     std::snprintf(status_, sizeof(status_), "%s", text ? text : "");
+}
+
+void DemoUi::renderWifiScan()
+{
+    lcd_.fillRect(kMainX, kMainY, kMainW, kMainH, kBg);
+
+    // Title.
+    lcd_.drawText(kMainX + 6, kMainY + 6, "WiFi Scan", kOrange, 2);
+
+    constexpr int kLineH    = 14;
+    constexpr int kMaxLines = 8;
+    int y                   = kMainY + 32;
+
+    if (wifi_scanning_) {
+        lcd_.drawText(kMainX + 6, y, "Scanning...", kWhite, 1);
+    } else if (wifi_results_.empty()) {
+        lcd_.drawText(kMainX + 6, y, "No networks found", kRed, 1);
+    } else {
+        const int start = std::max<int>(0, static_cast<int>(wifi_results_.size()) - kMaxLines);
+        for (int i = start; i < static_cast<int>(wifi_results_.size()); ++i) {
+            const auto& result = wifi_results_[i];
+            LcdSt7789::Color color;
+            if (result.first > -60) {
+                color = kGreen;
+            } else if (result.first > -70) {
+                color = kYellow;
+            } else {
+                color = kRed;
+            }
+
+            char line[64] = {};
+            std::snprintf(line, sizeof(line), "%d %s", result.first, result.second.c_str());
+            const std::string clipped = truncateToFit(lcd_, line, kMainW - 12, 1);
+            lcd_.drawText(kMainX + 6, y, clipped.c_str(), color, 1);
+            y += kLineH;
+        }
+    }
+
+    lcd_.drawText(kMainX + 6, LcdSt7789::kHeight - 14, status_, kMuted, 1);
+}
+
+void DemoUi::startWifiScan()
+{
+    if (wifi_inited_) {
+        return;
+    }
+
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        err = nvs_flash_init();
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE("wifi_scan", "NVS init failed: %s", esp_err_to_name(err));
+        setStatus("NVS FAIL");
+        return;
+    }
+
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_sta();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    wifi_inited_ = true;
+    last_scan_us_ = esp_timer_get_time();
+    wifi_results_.clear();
+}
+
+void DemoUi::stopWifiScan()
+{
+    if (!wifi_inited_) {
+        return;
+    }
+    esp_wifi_stop();
+    esp_wifi_deinit();
+    wifi_inited_ = false;
+    wifi_scanning_ = false;
+    wifi_results_.clear();
+}
+
+void DemoUi::performWifiScan()
+{
+    if (!wifi_inited_) {
+        return;
+    }
+
+    wifi_scanning_ = true;
+    wifi_results_.clear();
+
+    constexpr int kMaxAp = 16;
+    wifi_ap_record_t ap_info[kMaxAp] = {};
+    uint16_t ap_count                = 0;
+    uint16_t number                  = kMaxAp;
+
+    esp_err_t err = esp_wifi_scan_start(nullptr, true);
+    if (err != ESP_OK) {
+        ESP_LOGE("wifi_scan", "scan start failed: %s", esp_err_to_name(err));
+        wifi_scanning_ = false;
+        setStatus("SCAN FAIL");
+        return;
+    }
+
+    err = esp_wifi_scan_get_ap_num(&ap_count);
+    if (err != ESP_OK) {
+        ESP_LOGE("wifi_scan", "get ap num failed: %s", esp_err_to_name(err));
+        wifi_scanning_ = false;
+        setStatus("SCAN FAIL");
+        return;
+    }
+
+    err = esp_wifi_scan_get_ap_records(&number, ap_info);
+    if (err != ESP_OK) {
+        ESP_LOGE("wifi_scan", "get ap records failed: %s", esp_err_to_name(err));
+        wifi_scanning_ = false;
+        setStatus("SCAN FAIL");
+        return;
+    }
+
+    for (int i = 0; i < number; ++i) {
+        const char* ssid = reinterpret_cast<const char*>(ap_info[i].ssid);
+        if (ssid[0] == '\0') {
+            continue;
+        }
+        wifi_results_.push_back({ap_info[i].rssi, ssid});
+    }
+
+    std::sort(wifi_results_.begin(), wifi_results_.end(),
+              [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    wifi_scanning_ = false;
+    setStatus("SCAN OK");
+    ESP_LOGI("wifi_scan", "found %d networks", static_cast<int>(wifi_results_.size()));
+}
+
+void DemoUi::renderSdcard()
+{
+    lcd_.fillRect(kMainX, kMainY, kMainW, kMainH, kBg);
+
+    lcd_.drawText(kMainX + 6, kMainY + 6, "SD Card", kOrange, 2);
+
+    constexpr int kLineY = kMainY + 36;
+    constexpr int kLineH = 16;
+
+    if (sd_mounted_) {
+        lcd_.drawText(kMainX + 6, kLineY, "Mounted", kGreen, 1);
+        lcd_.drawText(kMainX + 6, kLineY + kLineH, sd_name_.c_str(), kWhite, 1);
+        lcd_.drawText(kMainX + 6, kLineY + kLineH * 2, sd_size_.c_str(), kCyan, 1);
+        lcd_.drawText(kMainX + 6, kLineY + kLineH * 3, sd_type_.c_str(), kCyan, 1);
+    } else {
+        lcd_.drawText(kMainX + 6, kLineY, "Not Found", kRed, 1);
+    }
+
+    lcd_.drawText(kMainX + 6, LcdSt7789::kHeight - 14, status_, kMuted, 1);
+}
+
+void DemoUi::probeSdcard()
+{
+    auto info       = demo::GetHal().sdcard().probe();
+    sd_mounted_     = info.mounted;
+    sd_name_        = std::move(info.name);
+    sd_size_        = std::move(info.size);
+    sd_type_        = std::move(info.type);
+    setStatus(info.mounted ? "SD OK" : "SD FAIL");
 }
 
 }  // namespace demo

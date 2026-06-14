@@ -205,7 +205,7 @@ esp_err_t LcdSt7789::init()
     spi_bus_config_t bus_config = {};
     bus_config.sclk_io_num     = CONFIG_LCD_PIN_SCLK;
     bus_config.mosi_io_num     = CONFIG_LCD_PIN_MOSI;
-    bus_config.miso_io_num     = -1;
+    bus_config.miso_io_num     = CONFIG_LCD_PIN_MISO;
     bus_config.quadwp_io_num   = -1;
     bus_config.quadhd_io_num   = -1;
     bus_config.max_transfer_sz = kWidth * kHeight * sizeof(Color);

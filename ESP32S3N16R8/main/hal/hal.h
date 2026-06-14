@@ -5,6 +5,7 @@
 #include "audio/es8311.h"
 #include "imu/mpu6050.h"
 #include "keyboard/keyboard.h"
+#include "sdcard/sdcard.h"
 
 namespace demo {
 
@@ -35,6 +36,9 @@ public:
     // IMU.
     Mpu6050& imu() { return imu_; }
 
+    // SD card.
+    SdCard& sdcard() { return sdcard_; }
+
     // Convenience: scan the internal I2C bus and print results.
     void i2cScan();
 
@@ -43,6 +47,7 @@ private:
     Keyboard keyboard_;
     Es8311 audio_;
     Mpu6050 imu_;
+    SdCard sdcard_;
     bool initialized_ = false;
 };
 
