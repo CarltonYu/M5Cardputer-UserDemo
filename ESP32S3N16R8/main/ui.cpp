@@ -59,6 +59,7 @@ enum class AppKind {
     kChat,
     kWifiScan,
     kSdcard,
+    kRecord,
 };
 
 struct AppEntry {
@@ -101,7 +102,7 @@ constexpr LcdSt7789::Color kRed             = LcdSt7789::rgb(0xFF, 0x60, 0x60);
 
 const AppEntry kApps[] = {
     {"Scan", "WiFi", image_data_scan_big, image_data_scan_small, AppKind::kWifiScan},
-    {"Record", "Audio", image_data_record_big, image_data_record_small, AppKind::kPlaceholder},
+    {"Record", "Audio", image_data_record_big, image_data_record_small, AppKind::kRecord},
     {"Chat", "ESP NOW", image_data_chat_big, image_data_chat_small, AppKind::kChat},
     {"Remote", "IR", image_data_ir_big, image_data_ir_small, AppKind::kPlaceholder},
     {"REPL", "Pika", image_data_repl_big, image_data_repl_small, AppKind::kPlaceholder},
@@ -211,6 +212,11 @@ bool DemoUi::update()
         }
     }
 
+    if (page_ == Page::kRecord) {
+        updateRecord();
+        redraw = true;
+    }
+
     const std::int64_t now = esp_timer_get_time();
     if (now >= next_tick_us_) {
         next_tick_us_ = now + 500000;
@@ -255,6 +261,8 @@ bool DemoUi::handleEvent(const InputEvent& event)
                 openSelected();
             } else if (page_ == Page::kChat) {
                 sendChatPreset();
+            } else if (page_ == Page::kRecord) {
+                toggleRecordPlayback();
             } else {
                 setStatus("ENTER");
             }
@@ -315,6 +323,10 @@ void DemoUi::handleRotateEvent(const InputEvent& event)
         selector_vel_ = 0.0f;
     }
 
+    if (page_ == Page::kLauncher) {
+        GetHal().playTone(800, 25, 0.70f);
+    }
+
     setStatus(ticks > 0 ? "RIGHT" : "LEFT");
 }
 
@@ -331,6 +343,8 @@ void DemoUi::render()
         renderWifiScan();
     } else if (page_ == Page::kSdcard) {
         renderSdcard();
+    } else if (page_ == Page::kRecord) {
+        renderRecord();
     } else {
         renderPlaceholder();
     }
@@ -531,6 +545,10 @@ void DemoUi::openSelected()
         setStatus("SDCARD");
         next_sd_probe_us_ = 0;
         probeSdcard();
+    } else if (app.kind == AppKind::kRecord) {
+        page_ = Page::kRecord;
+        setStatus("REC");
+        startRecordPage();
     } else {
         page_ = Page::kPlaceholder;
         setStatus(app.subtitle);
@@ -541,6 +559,9 @@ void DemoUi::closeApp()
 {
     if (page_ == Page::kWifiScan) {
         stopWifiScan();
+    }
+    if (page_ == Page::kRecord) {
+        stopRecordPage();
     }
     page_ = Page::kLauncher;
     setStatus("BACK");
@@ -739,6 +760,159 @@ void DemoUi::probeSdcard()
     sd_size_        = std::move(info.size);
     sd_type_        = std::move(info.type);
     setStatus(info.mounted ? "SD OK" : "SD FAIL");
+}
+
+
+
+void DemoUi::startRecordPage()
+{
+    if (record_buffer_ == nullptr) {
+        record_buffer_ = new std::int16_t[kRecordTotalSize]();
+    }
+    record_write_idx_      = 2;
+    record_draw_idx_       = 0;
+    record_is_recording_   = true;
+    record_is_playing_     = false;
+    record_play_sample_idx_ = 0;
+
+    GetHal().audio().enableMicrophone();
+    if (GetHal().i2sAudio().startRecording() != ESP_OK) {
+        setStatus("REC FAIL");
+    }
+}
+
+void DemoUi::stopRecordPage()
+{
+    stopRecordPlayback();
+    GetHal().i2sAudio().stopRecording();
+    // Restore normal DAC volume for launcher beeps.
+    GetHal().audio().writeReg(0x32, 0xBF);
+    if (record_buffer_ != nullptr) {
+        delete[] record_buffer_;
+        record_buffer_ = nullptr;
+    }
+}
+
+void DemoUi::startRecordPlayback()
+{
+    if (record_buffer_ == nullptr) {
+        return;
+    }
+    record_is_recording_ = false;
+    GetHal().i2sAudio().stopRecording();
+
+    GetHal().audio().enableSpeaker();
+    if (GetHal().i2sAudio().startPlayback() != ESP_OK) {
+        setStatus("PLAY FAIL");
+        return;
+    }
+    // Boost playback level by +12 dB; recordings are captured at 27 dB analog
+    // gain to avoid clipping, so they need a little digital lift on playback.
+    GetHal().audio().writeReg(0x32, 0xD7);
+
+    record_is_playing_      = true;
+    record_play_sample_idx_ = 0;
+    setStatus("PLAYING");
+}
+
+void DemoUi::stopRecordPlayback()
+{
+    if (!record_is_playing_) {
+        return;
+    }
+    GetHal().i2sAudio().stopPlayback();
+    // Return DAC volume to normal for subsequent launcher beeps.
+    GetHal().audio().writeReg(0x32, 0xBF);
+    record_is_playing_ = false;
+}
+
+void DemoUi::toggleRecordPlayback()
+{
+    if (record_is_playing_) {
+        stopRecordPlayback();
+        GetHal().audio().enableMicrophone();
+        if (GetHal().i2sAudio().startRecording() == ESP_OK) {
+            record_is_recording_ = true;
+            setStatus("REC");
+        } else {
+            setStatus("REC FAIL");
+        }
+    } else {
+        startRecordPlayback();
+    }
+}
+
+void DemoUi::updateRecord()
+{
+    if (record_buffer_ == nullptr) {
+        return;
+    }
+
+    if (record_is_playing_) {
+        if (record_play_sample_idx_ >= kRecordTotalSize) {
+            stopRecordPlayback();
+            GetHal().audio().enableMicrophone();
+            if (GetHal().i2sAudio().startRecording() == ESP_OK) {
+                record_is_recording_ = true;
+                setStatus("REC");
+            }
+            return;
+        }
+        const std::size_t remaining = kRecordTotalSize - record_play_sample_idx_;
+        const std::size_t chunk     = std::min(kRecordBlockSize, remaining);
+        const int written =
+            GetHal().i2sAudio().writePlayBuffer(&record_buffer_[record_play_sample_idx_], chunk);
+        if (written > 0) {
+            record_play_sample_idx_ += static_cast<std::size_t>(written);
+        }
+    } else if (record_is_recording_) {
+        std::int16_t* block = &record_buffer_[record_write_idx_ * kRecordBlockSize];
+        const int n         = GetHal().i2sAudio().readRecordBuffer(block, kRecordBlockSize);
+        if (n == static_cast<int>(kRecordBlockSize)) {
+            record_write_idx_ = (record_write_idx_ + 1) % kRecordBlocks;
+            static int s_log_count = 0;
+            if (++s_log_count >= 100) {
+                s_log_count = 0;
+                std::int32_t peak = 0;
+                for (std::size_t i = 0; i < kRecordBlockSize; ++i) {
+                    std::int32_t v = std::abs(static_cast<int>(block[i]));
+                    if (v > peak) peak = v;
+                }
+                ESP_LOGI("record", "peak=%ld", static_cast<long>(peak));
+            }
+        }
+    }
+}
+
+void DemoUi::renderRecord()
+{
+    lcd_.fillRect(kMainX, kMainY, kMainW, kMainH, kBg);
+
+    const char* title            = record_is_playing_ ? "Playing" : "Recording";
+    const LcdSt7789::Color title_color = record_is_playing_ ? kCyan : kRed;
+    lcd_.drawText(kMainX + 6, kMainY + 6, title, title_color, 2);
+
+    constexpr int kWaveTop    = kMainY + 36;
+    constexpr int kWaveHeight = kMainH - 50;
+    lcd_.fillRect(kMainX + 10, kWaveTop, static_cast<int>(kRecordBlockSize), kWaveHeight, kBlack);
+
+    if (record_buffer_ != nullptr) {
+        const std::size_t latest = (record_write_idx_ + kRecordBlocks - 1) % kRecordBlocks;
+        const std::int16_t* data = &record_buffer_[latest * kRecordBlockSize];
+        const int center_y       = kWaveTop + kWaveHeight / 2;
+        constexpr int shift      = 8;
+
+        for (std::size_t x = 0; x < kRecordBlockSize; ++x) {
+            int value = data[x] >> shift;
+            const int limit = kWaveHeight / 2 - 1;
+            if (value > limit) value = limit;
+            if (value < -limit) value = -limit;
+            const int y = center_y + value;
+            lcd_.drawPixel(kMainX + 10 + static_cast<int>(x), y, kGreen);
+        }
+    }
+
+    lcd_.drawText(kMainX + 6, LcdSt7789::kHeight - 14, status_, kMuted, 1);
 }
 
 }  // namespace demo

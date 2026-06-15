@@ -10,6 +10,7 @@ idf_component_register(
         "hal/keyboard/keyboard.cpp"
         "hal/keyboard/tca8418.cpp"
         "hal/audio/es8311.cpp"
+        "hal/audio/i2s_audio.cpp"
         "hal/imu/mpu6050.cpp"
         "hal/sdcard/sdcard.cpp"
     INCLUDE_DIRS "."
@@ -18,6 +19,7 @@ idf_component_register(
         esp_driver_gpio
         esp_driver_spi
         esp_driver_i2c
+        esp_driver_i2s
         esp_timer
         esp_event
         esp_netif

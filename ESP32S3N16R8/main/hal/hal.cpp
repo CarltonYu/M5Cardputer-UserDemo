@@ -5,6 +5,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include <cmath>
+#include <vector>
+
 namespace demo {
 
 namespace {
@@ -46,9 +49,18 @@ esp_err_t Hal::init()
         ESP_LOGW(kTag, "keyboard init failed, continuing without keyboard");
     }
 
+    // Initialize I2S audio stream first so the codec has clocks when powered up.
+    if (i2s_audio_.init() != ESP_OK) {
+        ESP_LOGW(kTag, "I2S audio init failed, continuing without audio");
+    }
+
     // Initialize ES8311 audio codec.  Non-fatal until I2S is wired.
     if (audio_.enableSpeaker() != ESP_OK) {
         ESP_LOGW(kTag, "ES8311 speaker init failed, continuing without audio");
+    } else {
+        // Mute the DAC until something is actually played; a powered-up DAC
+        // without an active I2S stream can produce a buzzing noise.
+        audio_.writeReg(0x32, 0x00);
     }
 
     // Initialize MPU6050 IMU.  Non-fatal if not present.
@@ -106,6 +118,53 @@ void Hal::i2cScan()
         printf("\r\n");
     }
     fflush(stdout);
+}
+
+esp_err_t Hal::playTone(int freq_hz, int duration_ms, float volume)
+{
+    if (!i2s_audio_.initialized()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (i2s_audio_.isRecording()) {
+        return ESP_OK;
+    }
+
+    const std::size_t samples = static_cast<std::size_t>(CONFIG_AUDIO_SAMPLE_RATE) * duration_ms / 1000;
+    if (samples == 0) {
+        return ESP_OK;
+    }
+
+    std::vector<std::int16_t> buffer(samples);
+    const float step = 2.0f * static_cast<float>(M_PI) * static_cast<float>(freq_hz) /
+                       static_cast<float>(CONFIG_AUDIO_SAMPLE_RATE);
+    for (std::size_t i = 0; i < samples; ++i) {
+        float sample = std::sin(step * static_cast<float>(i)) * volume;
+        buffer[i]    = static_cast<std::int16_t>(sample * 32767.0f);
+    }
+
+    i2s_audio_.stopRecording();
+    if (!audio_.speakerReady()) {
+        if (audio_.enableSpeaker() != ESP_OK) {
+            return ESP_FAIL;
+        }
+    }
+    // Restore normal beep volume in case it was left high by record playback.
+    audio_.writeReg(0x32, 0xBF);
+    if (i2s_audio_.startPlayback() != ESP_OK) {
+        return ESP_FAIL;
+    }
+
+    std::size_t written = 0;
+    while (written < samples) {
+        int n = i2s_audio_.writePlayBuffer(&buffer[written], samples - written);
+        if (n <= 0) {
+            break;
+        }
+        written += static_cast<std::size_t>(n);
+    }
+
+    i2s_audio_.stopPlayback();
+    return ESP_OK;
 }
 
 }  // namespace demo

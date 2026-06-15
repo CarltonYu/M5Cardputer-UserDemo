@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "audio/es8311.h"
+#include "audio/i2s_audio.h"
 #include "imu/mpu6050.h"
 #include "keyboard/keyboard.h"
 #include "sdcard/sdcard.h"
@@ -30,8 +31,11 @@ public:
     // Keyboard controller.
     Keyboard& keyboard() { return keyboard_; }
 
-    // Audio codec.
+    // Audio codec (I2C register control).
     Es8311& audio() { return audio_; }
+
+    // Audio I2S stream (record/playback).
+    I2sAudio& i2sAudio() { return i2s_audio_; }
 
     // IMU.
     Mpu6050& imu() { return imu_; }
@@ -42,10 +46,14 @@ public:
     // Convenience: scan the internal I2C bus and print results.
     void i2cScan();
 
+    // Play a short tone through the speaker (volume 0.0 .. 1.0).
+    esp_err_t playTone(int freq_hz, int duration_ms, float volume = 0.70f);
+
 private:
     I2cBus i2c_bus_;
     Keyboard keyboard_;
     Es8311 audio_;
+    I2sAudio i2s_audio_;
     Mpu6050 imu_;
     SdCard sdcard_;
     bool initialized_ = false;

@@ -178,6 +178,55 @@ menu "ESP32S3N16R8 User Demo Port"
 
     endmenu
 
+    menu "Audio (ES8311 + I2S)"
+
+        config AUDIO_I2S_SDA_GPIO
+            int "Audio I2C SDA GPIO"
+            range -1 48
+            default 17
+
+        config AUDIO_I2S_SCL_GPIO
+            int "Audio I2C SCL GPIO"
+            range -1 48
+            default 18
+
+        config AUDIO_I2S_MCLK_GPIO
+            int "Audio I2S MCLK GPIO"
+            range -1 48
+            default 38
+
+        config AUDIO_I2S_BCLK_GPIO
+            int "Audio I2S BCLK/SCLK GPIO"
+            range -1 48
+            default 35
+
+        config AUDIO_I2S_WS_GPIO
+            int "Audio I2S LRCK/WS GPIO"
+            range -1 48
+            default 36
+
+        config AUDIO_I2S_DIN_GPIO
+            int "Audio I2S DIN (ESP32 mic in) GPIO"
+            range -1 48
+            default 37
+
+        config AUDIO_I2S_DOUT_GPIO
+            int "Audio I2S DOUT (ESP32 speaker out) GPIO"
+            range -1 48
+            default 47
+
+        config AUDIO_SAMPLE_RATE
+            int "Audio sample rate (Hz)"
+            range 8000 48000
+            default 16000
+
+        config AUDIO_I2S_PORT
+            int "Audio I2S port number"
+            range 0 1
+            default 0
+
+    endmenu
+
     menu "ESP-NOW Chat"
 
         config ESPNOW_CHANNEL

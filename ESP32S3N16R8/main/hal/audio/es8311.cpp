@@ -1,6 +1,8 @@
 #include "es8311.h"
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 namespace demo {
 
@@ -9,34 +11,92 @@ constexpr const char* kTag = "es8311";
 
 // Each bulk entry is prefixed with the number of bytes that follow.
 // A trailing 0 marks the end of the list.
-constexpr std::uint8_t kSpeakerEnableBulk[] = {
-    2, 0x00, 0x80,  // RESET / CSM power on
-    2, 0x01, 0xB5,  // CLOCK MANAGER / MCLK = BCLK
-    2, 0x02, 0x18,  // CLOCK MANAGER / MULT_PRE = 3
-    2, 0x0D, 0x01,  // SYSTEM / Power up analog circuitry
-    2, 0x12, 0x00,  // SYSTEM / Power-up DAC
-    2, 0x13, 0x10,  // SYSTEM / Enable output to HP drive
-    2, 0x32, 0xBF,  // DAC / DAC volume (0xBF == ±0 dB)
-    2, 0x37, 0x08,  // DAC / Bypass DAC equalizer
+
+// Common open + sample-format sequence for 16 kHz / 16-bit I2S slave mode.
+// Ported from esp_codec_dev device/es8311/es8311.c.
+constexpr std::uint8_t kOpenSetFsBulk[] = {
+    2, 0x0D, 0xFA,  // Power-up analog circuitry reference
+    2, 0x44, 0x08,  // Enhance I2C noise immunity (written twice per reference)
+    2, 0x44, 0x08,
+    2, 0x01, 0x30,  // Clock manager: MCLK from BCLK, codec powered
+    2, 0x02, 0x00,  // Clock dividers
+    2, 0x03, 0x10,  // ADC OSR
+    2, 0x16, 0x24,  // Microphone gain ~24 dB
+    2, 0x04, 0x20,  // DAC OSR
+    2, 0x05, 0x00,  // ADC/DAC clock dividers
+    2, 0x0B, 0x00,  // System
+    2, 0x0C, 0x00,  // System
+    2, 0x10, 0x1F,  // System
+    2, 0x11, 0x7F,  // System
+    2, 0x00, 0x80,  // Reset / slave mode, CSM power on
+    // set_fs: 16-bit Philips I2S, 16 kHz, MCLK = 256 * LRCK
+    2, 0x09, 0x0C,
+    2, 0x0A, 0x0C,
+    2, 0x02, 0x00,
+    2, 0x05, 0x00,
+    2, 0x03, 0x10,
+    2, 0x04, 0x20,
+    2, 0x07, 0x00,
+    2, 0x08, 0xFF,
+    2, 0x06, 0x03,
+    2, 0x13, 0x10,
+    2, 0x1B, 0x0A,
+    2, 0x1C, 0x6A,
+    2, 0x44, 0x58,  // Set internal reference signal (ADCL + DACR)
     0
 };
 
-constexpr std::uint8_t kMicEnableBulk[] = {
-    2, 0x00, 0x80,  // RESET / CSM power on
-    2, 0x01, 0xBA,  // CLOCK MANAGER / MCLK = BCLK (mic path)
-    2, 0x02, 0x18,  // CLOCK MANAGER / MULT_PRE = 3
-    2, 0x0D, 0x01,  // SYSTEM / Power up analog circuitry
-    2, 0x0E, 0x02,  // SYSTEM / Enable analog PGA, enable ADC modulator
-    2, 0x14, 0x10,  // ADC / select Mic1p-Mic1n, minimum PGA gain
-    2, 0x17, 0xFF,  // ADC / ADC volume max gain
-    2, 0x1C, 0x6A,  // ADC / Equalizer bypass, cancel DC offset
+constexpr std::uint8_t kEnableDacBulk[] = {
+    2, 0x00, 0x80,  // Slave mode, CSM on
+    2, 0x01, 0x3F,  // Use external MCLK
+    2, 0x09, 0x0C,  // Power up DAC serial port
+    2, 0x17, 0xBF,  // ADC volume max
+    2, 0x0E, 0x02,  // Enable analog PGA
+    2, 0x12, 0x00,  // Power-up DAC
+    2, 0x14, 0x1A,  // Analog PGA / DMIC settings
+    2, 0x0D, 0x01,  // Power up analog circuitry
+    2, 0x15, 0x40,  // ADC ramp rate
+    2, 0x37, 0x08,  // DAC ramprate / bypass equalizer
+    2, 0x45, 0x00,  // GP control
+    2, 0x32, 0xBF,  // DAC volume 0 dB
+    0
+};
+
+constexpr std::uint8_t kEnableAdcBulk[] = {
+    2, 0x00, 0x80,
+    2, 0x01, 0x3F,
+    2, 0x0A, 0x0C,  // Power up ADC serial port
+    2, 0x17, 0xBF,
+    2, 0x0E, 0x02,  // Enable analog PGA / ADC modulator
+    2, 0x14, 0x10,  // MIC1 input, 0 dB PGA gain (matches M5Unified Mic.begin)
+    2, 0x0D, 0x01,
+    2, 0x15, 0x40,
+    2, 0x37, 0x08,
+    2, 0x45, 0x00,
+    2, 0x0F, 0x44,  // Analog bias / VMID for microphone
+    2, 0x44, 0x00,  // Normal ADC path, no loopback / no DAC reference mixing
+    2, 0x09, 0x00,  // Power down DAC serial port
+    2, 0x12, 0x02,  // Power down DAC analog
+    2, 0x32, 0x00,  // Mute DAC volume
     0
 };
 
 constexpr std::uint8_t kDisableBulk[] = {
-    2, 0x0D, 0xFC,  // SYSTEM / Power down analog circuitry
-    2, 0x0E, 0x6A,  // SYSTEM
-    2, 0x00, 0x00,  // RESET / CSM power down
+    2, 0x32, 0x00,
+    2, 0x17, 0x00,
+    2, 0x0E, 0xFF,
+    2, 0x12, 0x02,
+    2, 0x14, 0x00,
+    2, 0x0D, 0xFA,
+    2, 0x15, 0x00,
+    2, 0x02, 0x10,
+    2, 0x00, 0x00,
+    2, 0x00, 0x1F,
+    2, 0x01, 0x30,
+    2, 0x01, 0x00,
+    2, 0x45, 0x00,
+    2, 0x0D, 0xFC,
+    2, 0x02, 0x00,
     0
 };
 
@@ -61,13 +121,47 @@ Es8311::Es8311(I2cBus& i2c, std::uint8_t addr) : i2c_(i2c), addr_(addr) {}
 esp_err_t Es8311::enableSpeaker()
 {
     ESP_LOGI(kTag, "enable speaker");
-    return writeBulk(i2c_, addr_, kSpeakerEnableBulk);
+    // Give the NS4150B 5 V rail and the ES8311 oscillator time to stabilise
+    // before the first I2C transaction; cold boots occasionally NACK otherwise.
+    // After a successful init the delay can be much shorter.
+    vTaskDelay(pdMS_TO_TICKS(speaker_ok_ ? 50 : 500));
+    for (int attempt = 0; attempt < (speaker_ok_ ? 3 : 5); ++attempt) {
+        esp_err_t err = writeBulk(i2c_, addr_, kOpenSetFsBulk);
+        if (err == ESP_OK) {
+            err = writeBulk(i2c_, addr_, kEnableDacBulk);
+            if (err == ESP_OK) {
+                speaker_ok_ = true;
+                mic_ok_     = false;  // no longer in mic mode
+                return ESP_OK;
+            }
+        }
+        ESP_LOGW(kTag, "speaker enable attempt %d failed, retrying", attempt + 1);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    speaker_ok_ = false;
+    return ESP_FAIL;
 }
 
 esp_err_t Es8311::enableMicrophone()
 {
     ESP_LOGI(kTag, "enable microphone");
-    return writeBulk(i2c_, addr_, kMicEnableBulk);
+    // Cold-boot needs a longer settling delay; after first success 10 ms is enough.
+    vTaskDelay(pdMS_TO_TICKS(mic_ok_ ? 50 : 200));
+    for (int attempt = 0; attempt < (mic_ok_ ? 3 : 3); ++attempt) {
+        esp_err_t err = writeBulk(i2c_, addr_, kOpenSetFsBulk);
+        if (err == ESP_OK) {
+            err = writeBulk(i2c_, addr_, kEnableAdcBulk);
+            if (err == ESP_OK) {
+                mic_ok_      = true;
+                speaker_ok_  = false;  // no longer in speaker mode
+                return ESP_OK;
+            }
+        }
+        ESP_LOGW(kTag, "microphone enable attempt %d failed, retrying", attempt + 1);
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    mic_ok_ = false;
+    return ESP_FAIL;
 }
 
 esp_err_t Es8311::disable()

@@ -26,6 +26,10 @@ idf.py build
 idf.py flash
 ```
 
+## Project Status
+
+See [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) for the current state, audio subsystem details, known issues, and test checklist.
+
 ## Acknowledgments
 
 This project references the following open-source libraries and resources:

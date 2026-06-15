@@ -25,6 +25,7 @@ private:
         kChat,
         kWifiScan,
         kSdcard,
+        kRecord,
         kPlaceholder,
     };
 
@@ -71,11 +72,30 @@ private:
     std::string sd_type_;
     bool sd_mounted_ = false;
 
+    // Record state.
+    static constexpr std::size_t kRecordBlocks      = 80;
+    static constexpr std::size_t kRecordBlockSize   = 200;
+    static constexpr std::size_t kRecordTotalSize   = kRecordBlocks * kRecordBlockSize;
+    static constexpr std::int64_t kRecordPlayDurationUs = 1000000;  // ~1 s of recorded audio
+    std::int16_t* record_buffer_   = nullptr;
+    std::size_t record_write_idx_  = 2;
+    std::size_t record_draw_idx_   = 0;
+    bool record_is_recording_      = true;
+    bool record_is_playing_        = false;
+    std::size_t record_play_sample_idx_ = 0;
+
     void renderLauncher();
     void renderChat();
     void renderWifiScan();
     void renderSdcard();
+    void renderRecord();
     void renderPlaceholder();
+    void updateRecord();
+    void startRecordPage();
+    void stopRecordPage();
+    void startRecordPlayback();
+    void stopRecordPlayback();
+    void toggleRecordPlayback();
     void drawSystemBar();
     void drawKeyboardBar();
     void drawIconTile(int item_index, int x, int y, bool active);
