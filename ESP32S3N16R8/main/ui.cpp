@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 #include "esp_err.h"
 #include "esp_timer.h"
@@ -60,6 +61,7 @@ enum class AppKind {
     kWifiScan,
     kSdcard,
     kRecord,
+    kImu,
 };
 
 struct AppEntry {
@@ -109,8 +111,7 @@ const AppEntry kApps[] = {
     {"SetWiFi", "Config", image_data_set_wifi_big, image_data_set_wifi_small, AppKind::kPlaceholder},
     {"Clock", "Time", image_data_timer_big, image_data_timer_small, AppKind::kPlaceholder},
     {"Keyboard", "HID", image_data_keyboard_big, image_data_keyboard_small, AppKind::kPlaceholder},
-    {"IMU", "Motion", image_data_imu_big, image_data_imu_small, AppKind::kPlaceholder},
-    {"Compass", "I2C", image_data_imu_big, image_data_imu_small, AppKind::kPlaceholder},
+    {"IMU", "Motion", image_data_imu_big, image_data_imu_small, AppKind::kImu},
     {"SDCard", "TF", image_data_tf_big, image_data_tf_small, AppKind::kSdcard},
     {"StringIR", "Tool", image_data_stringir_toolkit_big, image_data_stringir_toolkit_small, AppKind::kPlaceholder},
     {"LoRaChat", "868", image_data_chat_lora_big, image_data_chat_lora_small, AppKind::kPlaceholder},
@@ -214,7 +215,9 @@ bool DemoUi::update()
 
     if (page_ == Page::kRecord) {
         updateRecord();
-        redraw = true;
+        if (rec_state_ == RecState::kRecording || rec_state_ == RecState::kPlaying) {
+            redraw = true;
+        }
     }
 
     const std::int64_t now = esp_timer_get_time();
@@ -226,6 +229,15 @@ bool DemoUi::update()
     if (page_ == Page::kLauncher && fast_scroll_count_ > 0 &&
         now - last_rotate_event_us_ > kFastScrollThresholdUs) {
         fast_scroll_count_ = 0;
+    }
+
+    if (page_ == Page::kImu) {
+        if (now >= imu_next_read_us_) {
+            imu_next_read_us_ = now + 20000;  // ~50 Hz
+            if (GetHal().imu().read(&imu_data_) == ESP_OK) {
+                redraw = true;
+            }
+        }
     }
 
     const float dt = (now - last_update_us_) / 1000000.0f;
@@ -262,7 +274,7 @@ bool DemoUi::handleEvent(const InputEvent& event)
             } else if (page_ == Page::kChat) {
                 sendChatPreset();
             } else if (page_ == Page::kRecord) {
-                toggleRecordPlayback();
+                toggleRecording();
             } else {
                 setStatus("ENTER");
             }
@@ -282,6 +294,14 @@ bool DemoUi::handleEvent(const InputEvent& event)
 
 void DemoUi::handleRotateEvent(const InputEvent& event)
 {
+    // Record page: rotation triggers dump when data is available.
+    if (page_ == Page::kRecord) {
+        if (rec_state_ == RecState::kStopped) {
+            dumpRecordBuffer();
+        }
+        return;
+    }
+
     const std::int64_t now = esp_timer_get_time();
     const std::int64_t dt  = now - last_rotate_event_us_;
     last_rotate_event_us_   = now;
@@ -345,6 +365,8 @@ void DemoUi::render()
         renderSdcard();
     } else if (page_ == Page::kRecord) {
         renderRecord();
+    } else if (page_ == Page::kImu) {
+        renderImu();
     } else {
         renderPlaceholder();
     }
@@ -424,6 +446,74 @@ void DemoUi::renderChat()
     }
 
     lcd_.drawText(kMainX + 6, LcdSt7789::kHeight - 14, status_, chat_.ready() ? kMuted : kRed, 1);
+}
+
+void DemoUi::renderImu()
+{
+    lcd_.fillRect(kMainX, kMainY, kMainW, kMainH, kBg);
+
+    // Title
+    lcd_.drawText(kMainX + 6, kMainY + 6, "IMU", kCyan, 2);
+
+    if (!GetHal().imu().isReady()) {
+        lcd_.drawText(kMainX + 6, kMainY + 36, "MPU6050 NOT FOUND", kRed, 1);
+        lcd_.drawText(kMainX + 6, kMainY + 52, "Check wiring & I2C", kMuted, 1);
+        lcd_.drawText(kMainX + 6, LcdSt7789::kHeight - 14, status_, kMuted, 1);
+        return;
+    }
+
+    // Accel data (green)
+    constexpr int kLineH = 15;
+    int y = kMainY + 30;
+
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "AX: %+6.2f g", imu_data_.accel_x);
+    lcd_.drawText(kMainX + 6, y, buf, kGreen, 1);
+    y += kLineH;
+    std::snprintf(buf, sizeof(buf), "AY: %+6.2f g", imu_data_.accel_y);
+    lcd_.drawText(kMainX + 6, y, buf, kGreen, 1);
+    y += kLineH;
+    std::snprintf(buf, sizeof(buf), "AZ: %+6.2f g", imu_data_.accel_z);
+    lcd_.drawText(kMainX + 6, y, buf, kGreen, 1);
+    y += kLineH + 4;
+
+    // Gyro data (cyan)
+    std::snprintf(buf, sizeof(buf), "GX: %+7.1f", imu_data_.gyro_x);
+    lcd_.drawText(kMainX + 6, y, buf, kCyan, 1);
+    y += kLineH;
+    std::snprintf(buf, sizeof(buf), "GY: %+7.1f", imu_data_.gyro_y);
+    lcd_.drawText(kMainX + 6, y, buf, kCyan, 1);
+    y += kLineH;
+    std::snprintf(buf, sizeof(buf), "GZ: %+7.1f", imu_data_.gyro_z);
+    lcd_.drawText(kMainX + 6, y, buf, kCyan, 1);
+    y += kLineH + 4;
+
+    // Temperature (yellow)
+    std::snprintf(buf, sizeof(buf), "TEMP: %.1f C", imu_data_.temp);
+    lcd_.drawText(kMainX + 6, y, buf, kYellow, 1);
+
+    // Tilt indicator (right side)
+    const int panel_cx = kMainX + kMainW - 50;
+    const int panel_cy = kMainY + 70;
+    const int panel_r  = 30;
+
+    // Outer circle
+    for (int a = 0; a < 360; a += 10) {
+        float rad = a * 3.14159f / 180.0f;
+        int px = panel_cx + static_cast<int>(std::cos(rad) * panel_r);
+        int py = panel_cy + static_cast<int>(std::sin(rad) * panel_r);
+        lcd_.drawPixel(px, py, kMuted);
+    }
+    // Cross hairs
+    lcd_.drawLine(panel_cx - panel_r, panel_cy, panel_cx + panel_r, panel_cy, kMuted);
+    lcd_.drawLine(panel_cx, panel_cy - panel_r, panel_cx, panel_cy + panel_r, kMuted);
+
+    // Ball (tilt)
+    int bx = std::clamp(static_cast<int>(imu_data_.accel_x * 20), -panel_r + 4, panel_r - 4);
+    int by = std::clamp(static_cast<int>(imu_data_.accel_y * 20), -panel_r + 4, panel_r - 4);
+    lcd_.fillCircle(panel_cx + bx, panel_cy + by, 5, kGreen);
+
+    lcd_.drawText(kMainX + 6, LcdSt7789::kHeight - 14, status_, kMuted, 1);
 }
 
 void DemoUi::renderPlaceholder()
@@ -549,6 +639,10 @@ void DemoUi::openSelected()
         page_ = Page::kRecord;
         setStatus("REC");
         startRecordPage();
+    } else if (app.kind == AppKind::kImu) {
+        page_ = Page::kImu;
+        setStatus("IMU");
+        imu_next_read_us_ = 0;
     } else {
         page_ = Page::kPlaceholder;
         setStatus(app.subtitle);
@@ -769,23 +863,21 @@ void DemoUi::startRecordPage()
     if (record_buffer_ == nullptr) {
         record_buffer_ = new std::int16_t[kRecordTotalSize]();
     }
-    record_write_idx_      = 2;
-    record_draw_idx_       = 0;
-    record_is_recording_   = true;
-    record_is_playing_     = false;
+    record_write_idx_ = 0;
+    record_draw_idx_  = 0;
     record_play_sample_idx_ = 0;
-
-    GetHal().audio().enableMicrophone();
-    if (GetHal().i2sAudio().startRecording() != ESP_OK) {
-        setStatus("REC FAIL");
-    }
+    rec_state_ = RecState::kIdle;
+    setStatus("PUSH TO REC");
 }
 
 void DemoUi::stopRecordPage()
 {
-    stopRecordPlayback();
-    GetHal().i2sAudio().stopRecording();
-    // Restore normal DAC volume for launcher beeps.
+    if (rec_state_ == RecState::kRecording) {
+        GetHal().i2sAudio().stopRecording();
+    } else if (rec_state_ == RecState::kPlaying) {
+        stopRecordPlayback();
+    }
+    rec_state_ = RecState::kIdle;
     GetHal().audio().writeReg(0x32, 0xBF);
     if (record_buffer_ != nullptr) {
         delete[] record_buffer_;
@@ -793,52 +885,36 @@ void DemoUi::stopRecordPage()
     }
 }
 
-void DemoUi::startRecordPlayback()
+void DemoUi::toggleRecording()
 {
-    if (record_buffer_ == nullptr) {
-        return;
-    }
-    record_is_recording_ = false;
-    GetHal().i2sAudio().stopRecording();
-
-    GetHal().audio().enableSpeaker();
-    if (GetHal().i2sAudio().startPlayback() != ESP_OK) {
-        setStatus("PLAY FAIL");
-        return;
-    }
-    // Boost playback level by +12 dB; recordings are captured at 27 dB analog
-    // gain to avoid clipping, so they need a little digital lift on playback.
-    GetHal().audio().writeReg(0x32, 0xD7);
-
-    record_is_playing_      = true;
-    record_play_sample_idx_ = 0;
-    setStatus("PLAYING");
-}
-
-void DemoUi::stopRecordPlayback()
-{
-    if (!record_is_playing_) {
-        return;
-    }
-    GetHal().i2sAudio().stopPlayback();
-    // Return DAC volume to normal for subsequent launcher beeps.
-    GetHal().audio().writeReg(0x32, 0xBF);
-    record_is_playing_ = false;
-}
-
-void DemoUi::toggleRecordPlayback()
-{
-    if (record_is_playing_) {
-        stopRecordPlayback();
-        GetHal().audio().enableMicrophone();
-        if (GetHal().i2sAudio().startRecording() == ESP_OK) {
-            record_is_recording_ = true;
-            setStatus("REC");
-        } else {
-            setStatus("REC FAIL");
+    if (rec_state_ == RecState::kIdle) {
+        // Start recording: clear buffer and begin capture.
+        if (record_buffer_ == nullptr) {
+            record_buffer_ = new std::int16_t[kRecordTotalSize]();
         }
-    } else {
+        std::memset(record_buffer_, 0, kRecordTotalSize * sizeof(std::int16_t));
+        record_write_idx_ = 0;
+
+        GetHal().audio().enableMicrophone();
+        if (GetHal().i2sAudio().startRecording() != ESP_OK) {
+            setStatus("REC FAIL");
+            return;
+        }
+        rec_state_ = RecState::kRecording;
+        setStatus("RECORDING");
+    } else if (rec_state_ == RecState::kRecording) {
+        // Stop recording.
+        GetHal().i2sAudio().stopRecording();
+        rec_state_ = RecState::kStopped;
+        setStatus("PUSH TO PLAY");
+    } else if (rec_state_ == RecState::kStopped) {
+        // Play back recording through speaker.
         startRecordPlayback();
+    } else if (rec_state_ == RecState::kPlaying) {
+        // Stop playback early.
+        stopRecordPlayback();
+        rec_state_ = RecState::kStopped;
+        setStatus("PUSH TO PLAY");
     }
 }
 
@@ -848,24 +924,7 @@ void DemoUi::updateRecord()
         return;
     }
 
-    if (record_is_playing_) {
-        if (record_play_sample_idx_ >= kRecordTotalSize) {
-            stopRecordPlayback();
-            GetHal().audio().enableMicrophone();
-            if (GetHal().i2sAudio().startRecording() == ESP_OK) {
-                record_is_recording_ = true;
-                setStatus("REC");
-            }
-            return;
-        }
-        const std::size_t remaining = kRecordTotalSize - record_play_sample_idx_;
-        const std::size_t chunk     = std::min(kRecordBlockSize, remaining);
-        const int written =
-            GetHal().i2sAudio().writePlayBuffer(&record_buffer_[record_play_sample_idx_], chunk);
-        if (written > 0) {
-            record_play_sample_idx_ += static_cast<std::size_t>(written);
-        }
-    } else if (record_is_recording_) {
+    if (rec_state_ == RecState::kRecording) {
         std::int16_t* block = &record_buffer_[record_write_idx_ * kRecordBlockSize];
         const int n         = GetHal().i2sAudio().readRecordBuffer(block, kRecordBlockSize);
         if (n == static_cast<int>(kRecordBlockSize)) {
@@ -881,22 +940,73 @@ void DemoUi::updateRecord()
                 ESP_LOGI("record", "peak=%ld", static_cast<long>(peak));
             }
         }
+    } else if (rec_state_ == RecState::kPlaying) {
+        if (record_play_sample_idx_ >= kRecordTotalSize) {
+            stopRecordPlayback();
+            rec_state_ = RecState::kStopped;
+            setStatus("PUSH TO PLAY");
+            return;
+        }
+        const std::size_t remaining = kRecordTotalSize - record_play_sample_idx_;
+        const std::size_t chunk     = std::min(kRecordBlockSize, remaining);
+        const int written =
+            GetHal().i2sAudio().writePlayBuffer(&record_buffer_[record_play_sample_idx_], chunk);
+        if (written > 0) {
+            record_play_sample_idx_ += static_cast<std::size_t>(written);
+        }
     }
+}
+
+void DemoUi::startRecordPlayback()
+{
+    if (record_buffer_ == nullptr) {
+        return;
+    }
+    GetHal().audio().enableSpeaker();
+    if (GetHal().i2sAudio().startPlayback() != ESP_OK) {
+        setStatus("PLAY FAIL");
+        return;
+    }
+    GetHal().audio().writeReg(0x32, 0xD7);  // +12 dB boost for quiet recordings
+    record_play_sample_idx_ = 0;
+    rec_state_ = RecState::kPlaying;
+    setStatus("PLAYING");
+}
+
+void DemoUi::stopRecordPlayback()
+{
+    GetHal().i2sAudio().stopPlayback();
+    GetHal().audio().writeReg(0x32, 0xBF);  // restore normal volume
 }
 
 void DemoUi::renderRecord()
 {
     lcd_.fillRect(kMainX, kMainY, kMainW, kMainH, kBg);
 
-    const char* title            = record_is_playing_ ? "Playing" : "Recording";
-    const LcdSt7789::Color title_color = record_is_playing_ ? kCyan : kRed;
+    // Title bar
+    const char* title;
+    LcdSt7789::Color title_color;
+    if (rec_state_ == RecState::kRecording) {
+        title       = "Recording";
+        title_color = kRed;
+    } else if (rec_state_ == RecState::kStopped) {
+        title       = "Recorded";
+        title_color = kGreen;
+    } else if (rec_state_ == RecState::kPlaying) {
+        title       = "Playing";
+        title_color = kCyan;
+    } else {
+        title       = "Record";
+        title_color = kCyan;
+    }
     lcd_.drawText(kMainX + 6, kMainY + 6, title, title_color, 2);
 
+    // Waveform area
     constexpr int kWaveTop    = kMainY + 36;
     constexpr int kWaveHeight = kMainH - 50;
     lcd_.fillRect(kMainX + 10, kWaveTop, static_cast<int>(kRecordBlockSize), kWaveHeight, kBlack);
 
-    if (record_buffer_ != nullptr) {
+    if (record_buffer_ != nullptr && record_write_idx_ > 0) {
         const std::size_t latest = (record_write_idx_ + kRecordBlocks - 1) % kRecordBlocks;
         const std::int16_t* data = &record_buffer_[latest * kRecordBlockSize];
         const int center_y       = kWaveTop + kWaveHeight / 2;
@@ -912,7 +1022,121 @@ void DemoUi::renderRecord()
         }
     }
 
+    // Bottom hint
+    if (rec_state_ == RecState::kIdle) {
+        lcd_.drawText(kMainX + 6, LcdSt7789::kHeight - 28, "Push=Record", kYellow, 1);
+    } else if (rec_state_ == RecState::kRecording) {
+        lcd_.drawText(kMainX + 6, LcdSt7789::kHeight - 28, "Push=Stop", kYellow, 1);
+    } else if (rec_state_ == RecState::kPlaying) {
+        lcd_.drawText(kMainX + 6, LcdSt7789::kHeight - 28, "Push=Stop Play", kYellow, 1);
+    } else if (rec_state_ == RecState::kStopped) {
+        lcd_.drawText(kMainX + 6, LcdSt7789::kHeight - 28, "Push=Play Rotate=Dump", kYellow, 1);
+    }
     lcd_.drawText(kMainX + 6, LcdSt7789::kHeight - 14, status_, kMuted, 1);
+}
+
+void DemoUi::dumpRecordBuffer()
+{
+    if (record_buffer_ == nullptr || kRecordTotalSize == 0) {
+        setStatus("NO DATA");
+        return;
+    }
+
+    // Total bytes = kRecordTotalSize samples × 2 bytes per sample.
+    constexpr std::size_t total_bytes = kRecordTotalSize * sizeof(std::int16_t);
+    const auto* raw                   = reinterpret_cast<const std::uint8_t*>(record_buffer_);
+
+    // --- WAV header (44 bytes) ---
+    // We embed a WAV header so the receiver can save and play directly.
+    const std::uint32_t data_size = static_cast<std::uint32_t>(total_bytes);
+    const std::uint32_t file_size = data_size + 36;
+    const std::uint16_t audio_fmt = 1;        // PCM
+    const std::uint16_t num_ch    = 1;        // mono
+    const std::uint16_t bits_ps   = 16;
+    const std::uint32_t sr        = CONFIG_AUDIO_SAMPLE_RATE;
+    const std::uint32_t byte_rate = sr * num_ch * bits_ps / 8;
+    const std::uint16_t block_al  = num_ch * bits_ps / 8;
+
+    std::uint8_t wav_hdr[44] = {};
+    // RIFF header
+    wav_hdr[0] = 'R'; wav_hdr[1] = 'I'; wav_hdr[2] = 'F'; wav_hdr[3] = 'F';
+    wav_hdr[4] = (file_size) & 0xFF; wav_hdr[5] = (file_size >> 8) & 0xFF;
+    wav_hdr[6] = (file_size >> 16) & 0xFF; wav_hdr[7] = (file_size >> 24) & 0xFF;
+    wav_hdr[8] = 'W'; wav_hdr[9] = 'A'; wav_hdr[10] = 'V'; wav_hdr[11] = 'E';
+    // fmt sub-chunk
+    wav_hdr[12] = 'f'; wav_hdr[13] = 'm'; wav_hdr[14] = 't'; wav_hdr[15] = ' ';
+    wav_hdr[16] = 16; wav_hdr[17] = 0; wav_hdr[18] = 0; wav_hdr[19] = 0;  // sub-chunk size
+    wav_hdr[20] = (audio_fmt) & 0xFF; wav_hdr[21] = (audio_fmt >> 8) & 0xFF;
+    wav_hdr[22] = (num_ch) & 0xFF; wav_hdr[23] = (num_ch >> 8) & 0xFF;
+    wav_hdr[24] = (sr) & 0xFF; wav_hdr[25] = (sr >> 8) & 0xFF;
+    wav_hdr[26] = (sr >> 16) & 0xFF; wav_hdr[27] = (sr >> 24) & 0xFF;
+    wav_hdr[28] = (byte_rate) & 0xFF; wav_hdr[29] = (byte_rate >> 8) & 0xFF;
+    wav_hdr[30] = (byte_rate >> 16) & 0xFF; wav_hdr[31] = (byte_rate >> 24) & 0xFF;
+    wav_hdr[32] = (block_al) & 0xFF; wav_hdr[33] = (block_al >> 8) & 0xFF;
+    wav_hdr[34] = (bits_ps) & 0xFF; wav_hdr[35] = (bits_ps >> 8) & 0xFF;
+    // data sub-chunk
+    wav_hdr[36] = 'd'; wav_hdr[37] = 'a'; wav_hdr[38] = 't'; wav_hdr[39] = 'a';
+    wav_hdr[40] = (data_size) & 0xFF; wav_hdr[41] = (data_size >> 8) & 0xFF;
+    wav_hdr[42] = (data_size >> 16) & 0xFF; wav_hdr[43] = (data_size >> 24) & 0xFF;
+
+    setStatus("DUMPING...");
+    ESP_LOGI("dump", "=== AUDIO DUMP BEGIN === (samples=%u, sr=%u)", (unsigned)kRecordTotalSize, (unsigned)sr);
+    ESP_LOGI("dump", "=== AUDIO DUMP BEGIN ===");
+    ESP_LOGI("dump", "SAMPLES=%u RATE=%u BITS=16 CH=1 FORMAT=WAV_BASE64", (unsigned)kRecordTotalSize, (unsigned)sr);
+
+    // Base64 encoder: emit 76-char lines.
+    static constexpr char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    // We process the WAV header (44 bytes) + raw PCM data as one continuous stream.
+    const std::size_t total_input = 44 + total_bytes;
+
+    char line[77] = {};
+    int line_pos  = 0;
+
+    auto get_byte = [&](std::size_t idx) -> std::uint8_t {
+        if (idx < 44) return wav_hdr[idx];
+        return raw[idx - 44];
+    };
+
+    for (std::size_t i = 0; i + 2 < total_input; i += 3) {
+        const std::uint8_t b0 = get_byte(i);
+        const std::uint8_t b1 = get_byte(i + 1);
+        const std::uint8_t b2 = get_byte(i + 2);
+
+        line[line_pos++] = b64_table[(b0 >> 2) & 0x3F];
+        line[line_pos++] = b64_table[((b0 << 4) | (b1 >> 4)) & 0x3F];
+        line[line_pos++] = b64_table[((b1 << 2) | (b2 >> 6)) & 0x3F];
+        line[line_pos++] = b64_table[b2 & 0x3F];
+
+        if (line_pos >= 76) {
+            line[line_pos] = '\0';
+            ESP_LOGI("dump", "%s", line);
+            line_pos = 0;
+        }
+    }
+
+    // Handle trailing bytes (0, 1, or 2 remaining).
+    const std::size_t remainder = total_input % 3;
+    if (remainder > 0) {
+        const std::size_t last = total_input - remainder;
+        const std::uint8_t b0 = get_byte(last);
+        line[line_pos++] = b64_table[(b0 >> 2) & 0x3F];
+        if (remainder == 1) {
+            line[line_pos++] = b64_table[(b0 << 4) & 0x3F];
+            line[line_pos++] = '=';
+            line[line_pos++] = '=';
+        } else {
+            const std::uint8_t b1 = get_byte(last + 1);
+            line[line_pos++] = b64_table[((b0 << 4) | (b1 >> 4)) & 0x3F];
+            line[line_pos++] = b64_table[(b1 << 2) & 0x3F];
+            line[line_pos++] = '=';
+        }
+        line[line_pos] = '\0';
+        ESP_LOGI("dump", "%s", line);
+    }
+
+    ESP_LOGI("dump", "=== AUDIO DUMP END ===");
+    setStatus("DUMP OK");
 }
 
 }  // namespace demo

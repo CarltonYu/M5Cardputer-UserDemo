@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "espnow_chat.h"
+#include "hal/imu/mpu6050.h"
 #include "input.h"
 #include "lcd_st7789.h"
 
@@ -26,6 +27,7 @@ private:
         kWifiScan,
         kSdcard,
         kRecord,
+        kImu,
         kPlaceholder,
     };
 
@@ -72,16 +74,20 @@ private:
     std::string sd_type_;
     bool sd_mounted_ = false;
 
+    // IMU state.
+    ImuData imu_data_ = {};
+    std::int64_t imu_next_read_us_ = 0;
+
     // Record state.
+    enum class RecState { kIdle, kRecording, kStopped, kPlaying };
+    RecState rec_state_ = RecState::kIdle;
+
     static constexpr std::size_t kRecordBlocks      = 80;
     static constexpr std::size_t kRecordBlockSize   = 200;
     static constexpr std::size_t kRecordTotalSize   = kRecordBlocks * kRecordBlockSize;
-    static constexpr std::int64_t kRecordPlayDurationUs = 1000000;  // ~1 s of recorded audio
     std::int16_t* record_buffer_   = nullptr;
-    std::size_t record_write_idx_  = 2;
+    std::size_t record_write_idx_  = 0;
     std::size_t record_draw_idx_   = 0;
-    bool record_is_recording_      = true;
-    bool record_is_playing_        = false;
     std::size_t record_play_sample_idx_ = 0;
 
     void renderLauncher();
@@ -89,17 +95,19 @@ private:
     void renderWifiScan();
     void renderSdcard();
     void renderRecord();
+    void renderImu();
     void renderPlaceholder();
     void updateRecord();
     void startRecordPage();
     void stopRecordPage();
+    void toggleRecording();
     void startRecordPlayback();
     void stopRecordPlayback();
-    void toggleRecordPlayback();
     void drawSystemBar();
     void drawKeyboardBar();
     void drawIconTile(int item_index, int x, int y, bool active);
     void drawIconImage(int item_index, int x, int y, bool active);
+    void dumpRecordBuffer();
     void drawCenteredText(int x, int y, int w, const char* text, LcdSt7789::Color color, int scale);
     void drawKeyboardPill(int y, const char* text, LcdSt7789::Color fill, LcdSt7789::Color text_color);
     void handleRotateEvent(const InputEvent& event);

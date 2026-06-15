@@ -13,15 +13,15 @@ constexpr const char* kTag = "es8311";
 // A trailing 0 marks the end of the list.
 
 // Common open + sample-format sequence for 16 kHz / 16-bit I2S slave mode.
-// Ported from esp_codec_dev device/es8311/es8311.c.
+// Clock config from M5Unified _microphone_enabled_cb_cardputer_adv (reg 0x01/0x02).
+// Mic boost (0x16) left at ES8311 default 0 dB to avoid ADC clipping.
 constexpr std::uint8_t kOpenSetFsBulk[] = {
     2, 0x0D, 0xFA,  // Power-up analog circuitry reference
-    2, 0x44, 0x08,  // Enhance I2C noise immunity (written twice per reference)
+    2, 0x44, 0x08,  // Enhance I2C noise immunity
     2, 0x44, 0x08,
-    2, 0x01, 0x30,  // Clock manager: MCLK from BCLK, codec powered
-    2, 0x02, 0x00,  // Clock dividers
+    2, 0x01, 0xBA,  // Clock: MCLK from BCLK (Cardputer ADV per M5Unified)
+    2, 0x02, 0x18,  // Clock multiplier PRE=3 (Cardputer ADV per M5Unified)
     2, 0x03, 0x10,  // ADC OSR
-    2, 0x16, 0x24,  // Microphone gain ~24 dB
     2, 0x04, 0x20,  // DAC OSR
     2, 0x05, 0x00,  // ADC/DAC clock dividers
     2, 0x0B, 0x00,  // System
@@ -29,10 +29,10 @@ constexpr std::uint8_t kOpenSetFsBulk[] = {
     2, 0x10, 0x1F,  // System
     2, 0x11, 0x7F,  // System
     2, 0x00, 0x80,  // Reset / slave mode, CSM power on
-    // set_fs: 16-bit Philips I2S, 16 kHz, MCLK = 256 * LRCK
+    // set_fs: 16-bit Philips I2S, 16 kHz
     2, 0x09, 0x0C,
     2, 0x0A, 0x0C,
-    2, 0x02, 0x00,
+    2, 0x02, 0x18,
     2, 0x05, 0x00,
     2, 0x03, 0x10,
     2, 0x04, 0x20,
@@ -62,22 +62,17 @@ constexpr std::uint8_t kEnableDacBulk[] = {
     0
 };
 
+// ADC-only path: match M5Unified _microphone_enabled_cb_cardputer_adv.
+// Minimal register set — no unnecessary DAC/extra writes.
 constexpr std::uint8_t kEnableAdcBulk[] = {
-    2, 0x00, 0x80,
-    2, 0x01, 0x3F,
-    2, 0x0A, 0x0C,  // Power up ADC serial port
-    2, 0x17, 0xBF,
-    2, 0x0E, 0x02,  // Enable analog PGA / ADC modulator
-    2, 0x14, 0x10,  // MIC1 input, 0 dB PGA gain (matches M5Unified Mic.begin)
-    2, 0x0D, 0x01,
-    2, 0x15, 0x40,
-    2, 0x37, 0x08,
-    2, 0x45, 0x00,
-    2, 0x0F, 0x44,  // Analog bias / VMID for microphone
-    2, 0x44, 0x00,  // Normal ADC path, no loopback / no DAC reference mixing
-    2, 0x09, 0x00,  // Power down DAC serial port
-    2, 0x12, 0x02,  // Power down DAC analog
-    2, 0x32, 0x00,  // Mute DAC volume
+    2, 0x00, 0x80,  // Reset, CSM on
+    2, 0x01, 0xBA,  // Clock: MCLK from BCLK
+    2, 0x02, 0x18,  // MULT_PRE=3
+    2, 0x0D, 0x01,  // Power up analog circuitry
+    2, 0x0E, 0x02,  // Enable analog PGA + ADC modulator
+    2, 0x14, 0x10,  // MIC1 input, PGA gain minimum (0 dB)
+    2, 0x17, 0xBF,  // ADC volume ±0 dB
+    2, 0x1C, 0x6A,  // ADC EQ bypass, cancel DC offset
     0
 };
 

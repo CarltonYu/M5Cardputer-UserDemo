@@ -15,8 +15,9 @@
 | LCD | 2.0 寸 320×240 ST7789 SPI |
 | 输入 | EC11 旋转编码器 + OK 按钮 |
 | 音频 | ES8311 Codec + NS4150B 功放 |
+| IMU | MPU6050（I2C，地址 0x68） |
 | 存储 | TF 卡（SDSPI，与 LCD 共享 SPI2） |
-| 可选 I2C 设备 | TCA8418 键盘控制器、MPU6050 IMU |
+| 可选 I2C 设备 | TCA8418 键盘控制器 |
 
 详细引脚规划见 `ESP32S3N16R8/PINOUT.md`。音频相关关键引脚：
 
@@ -43,7 +44,9 @@
 - [x] 自定义 ES8311 音频 Codec 驱动
 - [x] I2S 音频流封装：录音/播放半双工切换
 - [x] 录音应用（`Record`）：循环缓冲区录音 + 回放
+- [x] 串口音频 dump：OK 按钮触发 Base64 WAV 输出，Mac 端接收播放排查音质
 - [x] Launcher 旋转提示音 `playTone()`
+- [x] IMU 页面（`IMU`）：MPU6050 加速度/陀螺仪/温度实时显示 + 倾斜球指示器
 
 ---
 
@@ -74,7 +77,11 @@ ES8311 I2C addr:0x18 (7-bit)
 - **冷启动保护**：首次上电时等待 500 ms（麦克风首次 200 ms），并最多重试 5 次，避免 ES8311 上电未完成时 I2C NACK。
 - **成功标志位**：`speaker_ok_` / `mic_ok_` 首次成功后使用更短延时。
 - **空闲静音**：初始化完成后写入 `0x32 = 0x00` 把 DAC 静音，避免无 I2S 数据时功放产生底噪。
-- **录音模式**：关闭 DAC 电源，使用固定 MIC1 PGA 增益 `0x14 = 0x10`（与 M5Unified `Mic.begin()` 一致），**不再启用 ALC**，避免噪声门/泵吸导致的失真。
+- **录音模式**：关闭 DAC 电源，对齐 M5Unified `_microphone_enabled_cb_cardputer_adv` 配置：
+  - 寄存器 0x01 = 0xBA（MCLK from BCLK）、0x02 = 0x18（MULT_PRE=3）
+  - 不写 0x16（mic boost = 0 dB，ES8311 默认值，避免 ADC 削波）
+  - PGA 增益 0x14 = 0x10（最低）、ADC 音量 0x17 = 0xBF（±0 dB）
+  - 不启用 ALC
 
 ### 3.4 I2S 音频流设计
 
